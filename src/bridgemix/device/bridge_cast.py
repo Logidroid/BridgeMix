@@ -825,6 +825,70 @@ class BridgeCast(QObject):
             QTimer.singleShot(150 + i * 5, lambda f=frame: self._send_raw(f))
         return True
 
+    def show_pad_set(self, pad_set: int, colors: dict[int, tuple[int, int, int]]) -> None:
+        """Bring *pad_set* onto the pads, lit with *colors* (pad -> 0-32 RGB)
+        instead of their stored colours, changing each pad's light only once.
+
+        The device lights the pads one after the other when it loads a pad set,
+        so recalling it and then writing the colours made the pads change twice.
+        Instead:
+        - already on *pad_set*: only the colours that differ are written;
+        - otherwise *colors* go into the pad set's memory, the set is recalled
+          (it loads them), and the stored colours are written back to the
+          memory at once.  The device handles messages in order, so the memory
+          holds the bank colours only while the recall runs.
+        """
+        if not self._is_connected or not self.is_bridge_cast_x:
+            return
+        stored = {
+            n: self._pad_memory[(pad_set, n)].color
+            for n in range(1, pads.PAD_COUNT + 1)
+            if (pad_set, n) in self._pad_memory
+        }
+        current = self._state.get("pad_set_no", 0)
+        if (
+            pad_set == current
+            and len(stored) == pads.PAD_COUNT
+            and len(self._pads) == pads.PAD_COUNT
+        ):
+            changed = []
+            for n in range(1, pads.PAD_COUNT + 1):
+                want = colors.get(n, stored[n])
+                if self._pads[n].color != want:
+                    type_, base = pads.pad_location(n)
+                    self._write_color(C.SECTION_CHANNEL, type_, base, want)
+                    changed.append(n)
+            for i, n in enumerate(changed):  # read them back
+                type_, base = pads.pad_location(n)
+                frame = build_read(C.SECTION_CHANNEL, type_, base, 0x00, pads.PAD_SIZE)
+                QTimer.singleShot(50 + i * 5, lambda f=frame: self._send_raw(f))
+            return
+        if all(n in stored for n in colors):
+            for n, rgb in colors.items():
+                self._write_color(
+                    pads.SECTION_PAD_SET_MEMORY,
+                    pads.memory_type(pad_set, n),
+                    pads.pad_location(n)[1],
+                    rgb,
+                )
+            self.recall_pad_set(pad_set)
+            for n in colors:
+                self._write_color(
+                    pads.SECTION_PAD_SET_MEMORY,
+                    pads.memory_type(pad_set, n),
+                    pads.pad_location(n)[1],
+                    stored[n],
+                )
+        else:  # the stored colours aren't known yet: recall, then colour
+            self.recall_pad_set(pad_set)
+            for n, rgb in colors.items():
+                type_, base = pads.pad_location(n)
+                self._write_color(C.SECTION_CHANNEL, type_, base, rgb)
+
+    def _write_color(self, section: int, type_: int, base: int, rgb: tuple[int, int, int]) -> None:
+        for i, value in enumerate(rgb):
+            self._write_word(section, type_, base + pads.OFF_COLOR + 2 * i, value)
+
     def recall_pad_set(self, pad_set: int) -> None:
         """Switch the device to *pad_set* (0-4); it loads that set's pads."""
         if not self._is_connected or not self.is_bridge_cast_x:

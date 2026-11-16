@@ -350,21 +350,17 @@ class PadsPanel(QWidget):
             self._refresh_tile(number)
 
     def _go_to_bank(self, bank: int) -> None:
-        """Select *bank*: recall its pad set on the device (this also brings back
-        the pad set's own colours), then apply the bank's colours if it has some."""
+        """Select *bank*: bring its pad set onto the device's pads, lit with the
+        bank's colours (banks 6 and up) or the pad set's own (banks 1-5)."""
         settings = store.load()
         settings.bank = bank % settings.bank_count
         store.save(settings)
-        self._bridge.recall_pad_set(settings.bank_pad_set(settings.bank))
-        # The device handles messages in order and loads a pad set in about 5 ms,
-        # so the colours can follow the recall at once (measured on FW 3.00).
-        self._apply_bank_colors()
+        colors = {
+            int(pad): tuple(rgb)
+            for pad, rgb in settings.bank_colors.get(str(settings.bank), {}).items()
+        }
+        self._bridge.show_pad_set(settings.bank_pad_set(settings.bank), colors)
         self._bank_changed()
-
-    def _apply_bank_colors(self) -> None:
-        settings = store.load()
-        for pad, rgb in settings.bank_colors.get(str(settings.bank), {}).items():
-            self._bridge.set_pad_color(int(pad), tuple(rgb), memory_sets=[], current=True)
 
     def _step_bank(self, step: int) -> None:
         self._go_to_bank(store.load().bank + step)
