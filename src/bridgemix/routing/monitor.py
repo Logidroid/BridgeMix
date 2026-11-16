@@ -55,13 +55,15 @@ class RoutingMonitor(QObject):
         present = {s.index for s in streams}
         self._applied &= present  # forget streams that have gone away
 
-        for s in streams:
-            if s.index in self._applied:
-                continue
-            target = rules.get(s.app_key)
-            if not target:
-                continue
-            if s.sink_name == target:
-                self._applied.add(s.index)  # already where it belongs
-            elif backend.move(s.index, target):
-                self._applied.add(s.index)
+        pending = [s for s in streams if s.index not in self._applied and rules.get(s.app_key)]
+        if not pending:
+            return
+        targets = backend.list_targets()
+        for s in pending:
+            target = backend.resolve_target(rules[s.app_key], targets)
+            if target is None:
+                continue  # that channel isn't connected; retried once it is
+            if s.sink_name != target.sink_name:
+                backend.move(s.index, target.sink_name)  # logs a warning if it fails
+            # Once per stream, even if the move failed: no warning every tick.
+            self._applied.add(s.index)

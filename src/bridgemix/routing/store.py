@@ -2,15 +2,19 @@
 Persistent application-routing rules.
 
 A rule maps a stable application key (PulseAudio ``application.process.binary``,
-e.g. ``"zen"`` / ``"Discord"``) to a target sink *name* on the Bridge Cast.
-Rules survive relaunches and are re-applied to matching streams as they appear.
+e.g. ``"zen"`` / ``"Discord"``) to a Bridge Cast *channel* ("Chat", "Music"…).
+Rules survive relaunches and are re-applied to matching streams as they appear;
+`backend.resolve_target` turns a channel into the sink that carries it now, so a
+rule still works when the device shows up under another sink name (other USB
+port, firmware or audio profile).  Older versions saved a sink name instead;
+those rules are still accepted.
 
 File: ``~/.config/bridgemix/routing.json`` ::
 
     {
       "rules": {
-        "Discord": "alsa_output.usb-Roland_BRIDGE_CAST_V2_…HiFi__Line1__sink",
-        "zen":     "alsa_output.usb-Roland_BRIDGE_CAST_V2_…HiFi__Line3__sink"
+        "Discord": "Chat",
+        "zen":     "Music"
       }
     }
 """
@@ -31,7 +35,7 @@ def routing_path() -> Path:
 
 
 def load_rules() -> dict[str, str]:
-    """Return the saved {app_key: sink_name} rules.
+    """Return the saved {app_key: channel} rules.
 
     Never raises: a missing or malformed file yields an empty rule set so the
     app keeps working with no routing configured.
@@ -58,10 +62,10 @@ def save_rules(rules: dict[str, str]) -> None:
     log.info("Routing rules saved to %s (%d rules)", _ROUTING_PATH, len(rules))
 
 
-def set_rule(app_key: str, sink_name: str) -> dict[str, str]:
+def set_rule(app_key: str, channel: str) -> dict[str, str]:
     """Add/replace one rule and persist; returns the updated rule set."""
     rules = load_rules()
-    rules[app_key] = sink_name
+    rules[app_key] = channel
     save_rules(rules)
     return rules
 

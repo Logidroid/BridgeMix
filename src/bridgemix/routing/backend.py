@@ -138,6 +138,30 @@ def _run_json(args: list[str]) -> list[dict]:
         return []
 
 
+def resolve_target(rule: str, targets: list[Target]) -> Target | None:
+    """The connected channel a saved rule points to, or None.
+
+    A rule names a channel ("Music"), so it keeps working when the device
+    appears under another sink name (other USB port, firmware or audio profile).
+    Rules saved by older versions name a sink: they match that sink, or else
+    the channel with the same LineN index, since every Roland UCM profile
+    numbers Chat, Game, Music and System as Line1 to Line4.
+    """
+    for t in targets:
+        if t.sink_name == rule:
+            return t
+    wanted = rule.casefold()
+    for t in targets:
+        if t.label.casefold() == wanted:
+            return t
+    m = _LINE_RE.search(rule) if _is_bridge_sink(rule, {}) else None
+    if m:
+        for t in targets:
+            if t.sort_key == int(m.group(1)):
+                return t
+    return None
+
+
 def list_targets() -> list[Target]:
     return parse_targets(_run_json(["list", "sinks"]))
 

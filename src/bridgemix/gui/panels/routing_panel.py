@@ -268,7 +268,8 @@ class _StreamRow(QWidget):
         if sink is None:
             store.remove_rule(key)  # stop auto-routing this app
         else:
-            store.set_rule(key, sink)
+            label = next(t.label for t in self._targets if t.sink_name == sink)
+            store.set_rule(key, label)  # by channel, so it survives a sink rename
             backend.move(self._stream.index, sink)
             self._monitor.note_manual(self._stream.index)
         self._on_changed()  # ask the panel to regroup this app under its new channel
