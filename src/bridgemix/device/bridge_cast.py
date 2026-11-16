@@ -77,11 +77,14 @@ _X_SYNC_FRAMES = [
     (C.SECTION_CHANNEL, C.TYPE_STRIP_CONFIG, 0x40, 0x00, C.SYNC_RQ1_LED_SIZE),
 ]
 
-# The BRIDGE CAST X reports a single level word for these USB inputs: the
+# The BRIDGE CAST X can report a single level word for these USB inputs: the
 # first word of the 4-byte slot moves, the second stays 0 even with stereo
-# content (seen on FW 1.02 build 67).  The word follows whichever side is
-# louder, so it is a level for both sides, not the left one; no other polled
-# block (7F 01 10/11) carries a right word.  It is shown on both bars.
+# content.  The word follows whichever side is louder, so it is a level for
+# both sides, not the left one; no other polled block (7F 01 10/11) carries a
+# right word.  FW 1.02 (build 67) does this for CHAT, GAME and MUSIC; FW 3.00
+# only for GAME, and sends real left and right words for CHAT and MUSIC.
+# A meter is shown on both bars until its right word is first seen non-zero,
+# and as sent from then on (see BridgeCast._stereo_meters).
 _X_SINGLE_LEVEL_METERS = ("st_chat", "st_game", "st_music", "ps_chat", "ps_game", "ps_music")
 
 
@@ -122,6 +125,10 @@ class BridgeCast(QObject):
         self._cached_phones_R: int = 0
         self._cached_line: tuple[int, int] = (0, 0)
 
+        # _X_SINGLE_LEVEL_METERS keys whose right word has been non-zero since
+        # the device connected: the firmware sends them in stereo.
+        self._stereo_meters: set[str] = set()
+
         # Guard against device pushing stale bulk state after a host write.
         # Maps param name → expiry timestamp (monotonic). While guarded, incoming
         # device state for that param is ignored so fresh host writes are not undone.
@@ -160,6 +167,7 @@ class BridgeCast(QObject):
 
         self._is_connected = True
         self._last_rx = time.monotonic()
+        self._stereo_meters.clear()  # the firmware may have changed since the last connection
         self._send_identity_request()
         self._send_rx_enable()
         self._heartbeat.start()
@@ -1005,8 +1013,11 @@ class BridgeCast(QObject):
         }
         if self.is_bridge_cast_x:
             for key in _X_SINGLE_LEVEL_METERS:
-                level = meters[key][0]
-                meters[key] = (level, level)
+                level, right = meters[key]
+                if right:
+                    self._stereo_meters.add(key)
+                if key not in self._stereo_meters:
+                    meters[key] = (level, level)
         self.meter_updated.emit(meters)
 
         # Game EQ spectrum analyzer status: mido[35] (wire byte 36) reads 0x01
