@@ -17,6 +17,8 @@ Measured on a BRIDGE CAST X with firmware 3.00:
   7F 7F 7F 1A <slot A-D> to the host when pressed, 7F 7F 7F 1C when released),
   6 = PAD set +/-, 7 = MIDI CC, 10 = REVERB.  The other numbers follow the
   order of Roland's command list.
+- The host recalls pad set n (0-4) with DT1 7F 7F 7F 20 00 n: the device loads
+  that set's pads into the current pads and sets the pad set number.
 - MIDI CC: option 1 = (CC number << 7) | channel (0-15).  The pad sends that
   control change with value 127 on the device's second MIDI port when pressed,
   and nothing when released.
@@ -38,6 +40,7 @@ PAD_SIZE = 0x30  # bytes per pad, from its name to the end of its options
 SECTION_PAD_SET_MEMORY = 0x12
 TYPE_PADS_FIRST = 0x0A  # SECTION_CHANNEL block holding pads 1 and 2
 ADDR_PAD_SET_NO = 0x36  # SECTION_CHANNEL / TYPE_SWITCH: current pad set, 0-4
+CMD_RECALL_PAD_SET = 0x20  # 7F 7F 7F 20 00 <pad set>
 
 NAME_LEN = 18
 OFF_FUNC = 0x20

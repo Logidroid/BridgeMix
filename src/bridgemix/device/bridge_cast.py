@@ -77,9 +77,21 @@ _SYNC_FRAMES = [
 # strip-config block carries its four knob assignments at 0x60-0x67.
 _X_SYNC_FRAMES = [
     (C.SECTION_CHANNEL, C.TYPE_STRIP_CONFIG, 0x40, 0x00, C.SYNC_RQ1_LED_SIZE),
-    # The six control pads (see bridgemix.device.pads).
+    # The six control pads (see bridgemix.device.pads), current and in the
+    # memory of each pad set.
     *(
         (C.SECTION_CHANNEL, *pads.pad_location(n), 0x00, pads.PAD_SIZE)
+        for n in range(1, pads.PAD_COUNT + 1)
+    ),
+    *(
+        (
+            pads.SECTION_PAD_SET_MEMORY,
+            pads.memory_type(ps, n),
+            pads.pad_location(n)[1],
+            0x00,
+            pads.PAD_SIZE,
+        )
+        for ps in range(pads.PAD_SET_COUNT)
         for n in range(1, pads.PAD_COUNT + 1)
     ),
 ]
@@ -139,6 +151,7 @@ class BridgeCast(QObject):
         self._cached_line: tuple[int, int] = (0, 0)
 
         self._pads: dict[int, pads.Pad] = {}  # current control pads, by number
+        self._pad_memory: dict[tuple[int, int], pads.Pad] = {}  # (pad set, number)
 
         # _X_SINGLE_LEVEL_METERS keys whose right word has been non-zero since
         # the device connected: the firmware sends them in stereo.
@@ -699,6 +712,15 @@ class BridgeCast(QObject):
             ):
                 self._decode_pad_frame(frame)
                 return
+            if (
+                sec == pads.SECTION_PAD_SET_MEMORY
+                and type_ >> 4 < pads.PAD_SET_COUNT
+                and type_ & 0x0F < pads.PAD_COUNT // 2
+                and addr_hi in (0x20, 0x20 + pads.PAD_SIZE)
+                and "payload" in frame
+            ):
+                self._decode_pad_memory_frame(frame)
+                return
             if sec == C.SECTION_STATUS:
                 # Heartbeat reply
                 if type_ == C.SUBTYPE_STATUS_10 and addr_hi == 0x00:
@@ -737,29 +759,71 @@ class BridgeCast(QObject):
             frame = build_read(C.SECTION_CHANNEL, type_, base, 0x00, pads.PAD_SIZE)
             QTimer.singleShot(n * 5, lambda f=frame: self._send_raw(f))
 
-    def assign_pad(self, number: int, func: int, opt1: int, opt2: int | None = None) -> bool:
-        """Give pad *number* a new function, in the current pads and in the memory
-        of the current pad set, so it survives switching pad sets."""
+    @property
+    def pad_memory(self) -> dict[tuple[int, int], pads.Pad]:
+        """The pads stored in each pad set, by (pad set 0-4, number 1-6)."""
+        return dict(self._pad_memory)
+
+    def assign_pad(
+        self,
+        number: int,
+        func: int,
+        opt1: int,
+        opt2: int | None = None,
+        pad_sets: list[int] | None = None,
+    ) -> bool:
+        """Give pad *number* a new function in the memory of *pad_sets* (default:
+        the current one) and, if the current pad set is among them, in the
+        current pads, so it survives switching pad sets."""
         if not self._is_connected or not self.is_bridge_cast_x:
             return False
-        pad_set = self._state.get("pad_set_no", 0)
+        current = self._state.get("pad_set_no", 0)
+        sets = [current] if pad_sets is None else pad_sets
         type_, base = pads.pad_location(number)
-        for section, block in (
-            (C.SECTION_CHANNEL, type_),
-            (pads.SECTION_PAD_SET_MEMORY, pads.memory_type(pad_set, number)),
-        ):
+        blocks = [(pads.SECTION_PAD_SET_MEMORY, pads.memory_type(ps, number)) for ps in sets]
+        if current in sets:
+            blocks.insert(0, (C.SECTION_CHANNEL, type_))
+        for section, block in blocks:
             self._write_word(section, block, base + pads.OFF_FUNC, func)
             self._write_word(section, block, base + pads.OFF_OPT1, opt1)
             if opt2 is not None:
                 self._write_word(section, block, base + pads.OFF_OPT2, opt2)
-        log.info("Pad %d (pad set %d): function 0x%04X, option %d", number, pad_set + 1, func, opt1)
-        frame = build_read(C.SECTION_CHANNEL, type_, base, 0x00, pads.PAD_SIZE)
-        QTimer.singleShot(150, lambda: self._send_raw(frame))  # read it back
+        log.info(
+            "Pad %d (pad sets %s): function 0x%04X, option %d",
+            number,
+            ", ".join(str(ps + 1) for ps in sets),
+            func,
+            opt1,
+        )
+        reads = [build_read(C.SECTION_CHANNEL, type_, base, 0x00, pads.PAD_SIZE)]
+        reads += [build_read(sec, blk, base, 0x00, pads.PAD_SIZE) for sec, blk in blocks[1:]]
+        for i, frame in enumerate(reads):  # read them back
+            QTimer.singleShot(150 + i * 5, lambda f=frame: self._send_raw(f))
         return True
+
+    def recall_pad_set(self, pad_set: int) -> None:
+        """Switch the device to *pad_set* (0-4); it loads that set's pads."""
+        if not self._is_connected or not self.is_bridge_cast_x:
+            return
+        if not 0 <= pad_set < pads.PAD_SET_COUNT:
+            return
+        self._send_raw(build_write(0x7F, 0x7F, pads.CMD_RECALL_PAD_SET, 0x00, pad_set))
+        log.info("Pad set %d recalled", pad_set + 1)
+        self._state["pad_set_no"] = pad_set  # the device doesn't report it back
+        self.parameter_changed.emit("pad_set_no", pad_set)
+        QTimer.singleShot(100, self.request_pads)
 
     def _write_word(self, section: int, type_: int, addr: int, word: int) -> None:
         """DT1 of one 14-bit word, MSB first (build_write's addr_lo carries the MSB)."""
         self._send_raw(build_write(section, type_, addr, (word >> 7) & 0x7F, word & 0x7F))
+
+    def _decode_pad_memory_frame(self, frame: dict) -> None:
+        data = (frame["addr_lo"], *frame["payload"])
+        pad_set, block = frame["type"] >> 4, frame["type"] & 0x0F
+        number = block * 2 + (1 if frame["addr_hi"] == 0x20 else 2)
+        pad = pads.decode_pad(number, data)
+        if pad is not None:
+            self._pad_memory[(pad_set, number)] = pad
 
     def _decode_pad_frame(self, frame: dict) -> None:
         # In a bulk reply, parse() puts the first data byte in addr_lo.
