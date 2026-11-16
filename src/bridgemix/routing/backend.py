@@ -29,6 +29,7 @@ _DEVICE_DESC_MATCH = "bridge cast"
 _DEVICE_NAME_MATCH = "bridge_cast"
 
 _LINE_RE = re.compile(r"Line(\d+)", re.IGNORECASE)
+OWN_SOUND_PREFIX = "bridgemix-sfx"  # node.name of sounds played by bridgemix.sounds
 _LR_SUFFIX_RE = re.compile(r"\s*(l/r|stereo)\s*$", re.IGNORECASE)
 
 
@@ -91,6 +92,8 @@ def parse_streams(sink_inputs: list[dict], sink_name_by_index: dict[int, str]) -
     streams: list[Stream] = []
     for si in sink_inputs:
         props = si.get("properties", {}) or {}
+        if str(props.get("node.name", "")).startswith(OWN_SOUND_PREFIX):
+            continue  # BridgeMix's own pad sounds: they pick their channel themselves
         app_key = (
             props.get("application.process.binary") or props.get("application.name") or "unknown"
         )
@@ -170,6 +173,17 @@ def list_streams() -> list[Stream]:
     sinks = _run_json(["list", "sinks"])
     name_by_index = {s["index"]: s["name"] for s in sinks if "index" in s and "name" in s}
     return parse_streams(_run_json(["list", "sink-inputs"]), name_by_index)
+
+
+def list_recording_apps() -> list[str]:
+    """Process names of the apps recording audio right now (e.g. "Discord")."""
+    apps = []
+    for so in _run_json(["list", "source-outputs"]):
+        props = so.get("properties", {}) or {}
+        app = props.get("application.process.binary") or props.get("application.name")
+        if app and app not in apps:
+            apps.append(app)
+    return apps
 
 
 def move(stream_index: int, sink_name: str) -> bool:

@@ -17,6 +17,7 @@ import time
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 
 from bridgemix.device import constants as C
+from bridgemix.device import pads
 from bridgemix.device.parameters import (
     HW_STRIP_PARAMS,
     REGISTRY,
@@ -75,6 +76,11 @@ _SYNC_FRAMES = [
 # strip-config block carries its four knob assignments at 0x60-0x67.
 _X_SYNC_FRAMES = [
     (C.SECTION_CHANNEL, C.TYPE_STRIP_CONFIG, 0x40, 0x00, C.SYNC_RQ1_LED_SIZE),
+    # The six control pads (see bridgemix.device.pads).
+    *(
+        (C.SECTION_CHANNEL, *pads.pad_location(n), 0x00, pads.PAD_SIZE)
+        for n in range(1, pads.PAD_COUNT + 1)
+    ),
 ]
 
 # The BRIDGE CAST X can report a single level word for these USB inputs: the
@@ -101,6 +107,10 @@ class BridgeCast(QObject):
     voice_preset_names_updated = pyqtSignal(list)  # list[str] — 5 Voice FX preset names
     profile_names_updated = pyqtSignal(list)  # list[str] — 5 device profile names
     game_eq_preset_names_updated = pyqtSignal(list)  # list[str] — 5 Game EQ preset slot names
+    pad_changed = pyqtSignal(object)  # pads.Pad, read from the device (BRIDGE CAST X)
+    # A SOUND EFFECTS pad or button was pressed (True) or released (False):
+    # the device asks the host to play sound slot n (0 = A).
+    sound_effect_requested = pyqtSignal(int, bool)
 
     # Internal signal for thread-bouncing mido callback → Qt main thread
     _sysex_received_internal = pyqtSignal(tuple)
@@ -124,6 +134,8 @@ class BridgeCast(QObject):
         # each tick; consumed by _decode_state_vector().  At most one tick (50 ms) stale.
         self._cached_phones_R: int = 0
         self._cached_line: tuple[int, int] = (0, 0)
+
+        self._pads: dict[int, pads.Pad] = {}  # current control pads, by number
 
         # _X_SINGLE_LEVEL_METERS keys whose right word has been non-zero since
         # the device connected: the firmware sends them in stereo.
@@ -664,6 +676,23 @@ class BridgeCast(QObject):
         addr_lo = frame["addr_lo"]
 
         if cmd == 0x12:  # DT1 (device → host)
+            if (
+                sec == 0x7F
+                and type_ == 0x7F
+                and addr_hi in (pads.CMD_SOUND_EFFECT_PLAY, pads.CMD_SOUND_EFFECT_STOP)
+                and "value" in frame
+            ):
+                slot = (addr_lo << 7) | frame["value"]
+                self.sound_effect_requested.emit(slot, addr_hi == pads.CMD_SOUND_EFFECT_PLAY)
+                return
+            if (
+                sec == C.SECTION_CHANNEL
+                and pads.TYPE_PADS_FIRST <= type_ < pads.TYPE_PADS_FIRST + pads.PAD_COUNT // 2
+                and addr_hi in (0x20, 0x20 + pads.PAD_SIZE)
+                and "payload" in frame
+            ):
+                self._decode_pad_frame(frame)
+                return
             if sec == C.SECTION_STATUS:
                 # Heartbeat reply
                 if type_ == C.SUBTYPE_STATUS_10 and addr_hi == 0x00:
@@ -685,6 +714,55 @@ class BridgeCast(QObject):
                 if name is not None and time.monotonic() > self._write_guard.get(name, 0):
                     self._state[name] = frame["value"]
                     self.parameter_changed.emit(name, frame["value"])
+
+    # ── Control pads (BRIDGE CAST X) ──────────────────────────────────────────
+
+    @property
+    def control_pads(self) -> dict[int, pads.Pad]:
+        """The control pads last read from the device, by number (1-6)."""
+        return dict(self._pads)
+
+    def request_pads(self) -> None:
+        """Re-read the six control pads; each reply emits pad_changed."""
+        if not self._is_connected or not self.is_bridge_cast_x:
+            return
+        for n in range(1, pads.PAD_COUNT + 1):
+            type_, base = pads.pad_location(n)
+            frame = build_read(C.SECTION_CHANNEL, type_, base, 0x00, pads.PAD_SIZE)
+            QTimer.singleShot(n * 5, lambda f=frame: self._send_raw(f))
+
+    def assign_pad(self, number: int, func: int, opt1: int, opt2: int | None = None) -> bool:
+        """Give pad *number* a new function, in the current pads and in the memory
+        of the current pad set, so it survives switching pad sets."""
+        if not self._is_connected or not self.is_bridge_cast_x:
+            return False
+        pad_set = self._state.get("pad_set_no", 0)
+        type_, base = pads.pad_location(number)
+        for section, block in (
+            (C.SECTION_CHANNEL, type_),
+            (pads.SECTION_PAD_SET_MEMORY, pads.memory_type(pad_set, number)),
+        ):
+            self._write_word(section, block, base + pads.OFF_FUNC, func)
+            self._write_word(section, block, base + pads.OFF_OPT1, opt1)
+            if opt2 is not None:
+                self._write_word(section, block, base + pads.OFF_OPT2, opt2)
+        log.info("Pad %d (pad set %d): function 0x%04X, option %d", number, pad_set + 1, func, opt1)
+        frame = build_read(C.SECTION_CHANNEL, type_, base, 0x00, pads.PAD_SIZE)
+        QTimer.singleShot(150, lambda: self._send_raw(frame))  # read it back
+        return True
+
+    def _write_word(self, section: int, type_: int, addr: int, word: int) -> None:
+        """DT1 of one 14-bit word, MSB first (build_write's addr_lo carries the MSB)."""
+        self._send_raw(build_write(section, type_, addr, (word >> 7) & 0x7F, word & 0x7F))
+
+    def _decode_pad_frame(self, frame: dict) -> None:
+        # In a bulk reply, parse() puts the first data byte in addr_lo.
+        data = (frame["addr_lo"], *frame["payload"])
+        number = (frame["type"] - pads.TYPE_PADS_FIRST) * 2 + (1 if frame["addr_hi"] == 0x20 else 2)
+        pad = pads.decode_pad(number, data)
+        if pad is not None:
+            self._pads[number] = pad
+            self.pad_changed.emit(pad)
 
     # ── Device identification ─────────────────────────────────────────────────
 

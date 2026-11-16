@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from bridgemix.device import constants as C
+from bridgemix.device.pads import ADDR_PAD_SET_NO
 
 
 @dataclass(frozen=True)
@@ -339,6 +340,9 @@ def _build_registry() -> dict[str, Parameter]:
             0,
         )
     )
+    # Current control pad set (BRIDGE CAST X), 0-4.  Read-only here: the pads
+    # and the hardware PAD +/- commands change it.
+    add(_p("pad_set_no", SC, SW, ADDR_PAD_SET_NO, 0, 4, 0, read_only=True))
 
     # ── Mix mode / link ───────────────────────────────────────────────────────
     add(_p("mix_mode", SG, SW, C.ADDR_MIX_MODE, 0, 1, 0))

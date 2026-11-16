@@ -83,6 +83,7 @@ from bridgemix.gui.panels.mic_setup_panel import MicSetupPanel
 from bridgemix.gui.panels.mic_sfx_panel import MicSfxPanel
 from bridgemix.gui.panels.midi_monitor import MidiMonitor
 from bridgemix.gui.panels.output_panel import OutputPanel
+from bridgemix.gui.panels.pads_panel import PadsPanel
 from bridgemix.gui.panels.plugins import PluginsPanel
 from bridgemix.gui.panels.routing_panel import RoutingPanel
 from bridgemix.gui.panels.system_panel import SystemPanel
@@ -92,6 +93,7 @@ from bridgemix.plugins.device import DeviceFacade
 from bridgemix.plugins.manager import PluginManager
 from bridgemix.routing.backend import is_supported as routing_is_supported
 from bridgemix.routing.monitor import RoutingMonitor
+from bridgemix.sounds import player as sound_player
 
 
 class MainWindow(QMainWindow):
@@ -348,6 +350,7 @@ class MainWindow(QMainWindow):
             ("VOICE FX", 3),
             ("GAME FX", 4),
             ("CHAT FX", 5),
+            ("PADS", 10),
             ("OUTPUT", 6),
             ("SYSTEM", 7),
             ("PLUGINS", 8),
@@ -383,6 +386,12 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(SystemPanel(b))  # 7 — system settings
         self._stack.addWidget(PluginsPanel(self._plugin_manager))  # 8 — plugins host
         self._stack.addWidget(MidiMonitor(b))  # 9 — MIDI debug
+
+        # Sounds A-D for SOUND EFFECTS pads: played here, also into voice chat.
+        self._sound_player = sound_player.SoundPlayer() if sound_player.available() else None
+        if self._sound_player is not None:
+            b.sound_effect_requested.connect(self._sound_player.handle)
+        self._stack.addWidget(PadsPanel(b, self._sound_player))  # 10 — sound pads
 
         self._overlay = _DisconnectOverlay(self._stack)
         self._overlay.resize(self._stack.size())
@@ -466,6 +475,8 @@ class MainWindow(QMainWindow):
             self._plugin_manager.shutdown_all()
             if self._routing_monitor is not None:
                 self._routing_monitor.stop()
+            if self._sound_player is not None:
+                self._sound_player.stop_all()
             self._bridge.disconnect_device()
             super().closeEvent(event)
             return
@@ -475,6 +486,8 @@ class MainWindow(QMainWindow):
             self._plugin_manager.shutdown_all()
             if self._routing_monitor is not None:
                 self._routing_monitor.stop()
+            if self._sound_player is not None:
+                self._sound_player.stop_all()
             self._bridge.disconnect_device()
             super().closeEvent(event)
             return
@@ -496,6 +509,8 @@ class MainWindow(QMainWindow):
         self._plugin_manager.shutdown_all()
         if self._routing_monitor is not None:
             self._routing_monitor.stop()
+        if self._sound_player is not None:
+            self._sound_player.stop_all()
         self._bridge.disconnect_device()
         if self._tray is not None:
             self._tray.hide()
