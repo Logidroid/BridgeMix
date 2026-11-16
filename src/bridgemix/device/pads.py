@@ -22,8 +22,9 @@ Measured on a BRIDGE CAST X with firmware 3.00:
   and nothing when released.
 
 BridgeMix's sound pads use MIDI CC rather than SOUND EFFECTS, which only knows
-four sounds: each pad of each pad set gets its own CC on channel 16, so every
-pad can play its own sound.
+four sounds: each pad gets its own CC on channel 16, so BridgeMix knows which
+pad was pressed.  Two more CCs step through BridgeMix's own sound banks, which
+have no limit, unlike the device's five pad sets.
 """
 
 from __future__ import annotations
@@ -47,9 +48,11 @@ OFF_OPT2 = 0x2A
 FUNC_BASE = 0x1000
 
 # The CC each BridgeMix sound pad sends: channel 16, CC 20-49
-# (pad set 1 pad 1 = 20 … pad set 5 pad 6 = 49).
+# (pad set 1 pad 1 = 20 … pad set 5 pad 6 = 49), and the two bank pads.
 SOUND_CC_CHANNEL = 15
 SOUND_CC_FIRST = 20
+BANK_PREV_CC = 50
+BANK_NEXT_CC = 51
 
 
 class Command(IntEnum):
@@ -98,6 +101,13 @@ def midi_cc_opt1(channel: int, control: int) -> int:
     return (control << 7) | channel
 
 
+def bank_step_for_cc(channel: int, control: int) -> int | None:
+    """-1 / +1 if this control change is a bank pad's, else None."""
+    if channel != SOUND_CC_CHANNEL:
+        return None
+    return {BANK_PREV_CC: -1, BANK_NEXT_CC: 1}.get(control)
+
+
 @dataclass(frozen=True)
 class Pad:
     number: int  # 1-6
@@ -121,6 +131,12 @@ class Pad:
     def is_sound_pad(self, pad_set: int) -> bool:
         """True if the pad sends the CC BridgeMix plays its sound for."""
         return self.midi_cc == (SOUND_CC_CHANNEL, sound_cc(pad_set, self.number))
+
+    @property
+    def bank_step(self) -> int | None:
+        """-1 / +1 if the pad steps through BridgeMix's sound banks."""
+        cc = self.midi_cc
+        return bank_step_for_cc(*cc) if cc is not None else None
 
     def describe(self) -> str:
         """Short label for the pad's function, e.g. 'SFX A' or 'Pad set +'."""
@@ -175,4 +191,11 @@ def decode_pad(number: int, data: bytes | tuple[int, ...] | list[int]) -> Pad | 
 def sound_pad_function(pad_set: int, number: int) -> tuple[int, int, int]:
     """(function, option 1, option 2) that make a pad a BridgeMix sound pad."""
     cc = sound_cc(pad_set, number)
+    return FUNC_BASE + Command.MIDI_CC, midi_cc_opt1(SOUND_CC_CHANNEL, cc), 0
+
+
+def bank_pad_function(step: int) -> tuple[int, int, int]:
+    """(function, option 1, option 2) for a pad that goes to the previous (-1)
+    or next (+1) BridgeMix sound bank."""
+    cc = BANK_NEXT_CC if step > 0 else BANK_PREV_CC
     return FUNC_BASE + Command.MIDI_CC, midi_cc_opt1(SOUND_CC_CHANNEL, cc), 0

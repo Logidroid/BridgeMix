@@ -2,7 +2,8 @@
 Plays the sound pads' sounds through PipeWire.
 
 A sound pad (see bridgemix.device.pads) sends its own MIDI CC when pressed;
-handle_control_change() plays the sound saved for that pad.
+handle_control_change() plays that pad's sound in the current bank, or steps
+to the previous / next bank for a bank pad.
 
 A sound plays with ``pw-play`` on a Bridge Cast channel (System by default, as
 Roland's app does), so you hear it and the STREAM mix gets it.  It is also
@@ -97,14 +98,21 @@ class SoundPlayer:
         self._counter = itertools.count(1)
 
     def handle_control_change(self, channel: int, control: int, value: int) -> None:
-        """A sound pad sends its own CC (value 127) when pressed."""
-        found = pads.pad_for_cc(channel, control)
-        if found is None or value == 0:
+        """A sound pad or a bank pad sends its own CC (value 127) when pressed."""
+        if value == 0:
             return
-        key = store.pad_key(*found)
-        sound = store.load().pads.get(key)
+        step = pads.bank_step_for_cc(channel, control)
+        if step is not None:
+            log.info("Sound bank %d", store.step_bank(step) + 1)
+            return
+        found = pads.pad_for_cc(channel, control)
+        if found is None:
+            return
+        settings = store.load()
+        key = store.pad_key(settings.bank, found[1])
+        sound = settings.pads.get(key)
         if sound is None or not sound.file:
-            log.info("Pad %s of pad set %d has no sound", found[1], found[0] + 1)
+            log.info("Pad %d has no sound in bank %d", found[1], settings.bank + 1)
             return
         if sound.press_again_stops and self.is_playing(key):
             self.stop(key)

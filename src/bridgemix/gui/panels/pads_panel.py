@@ -1,11 +1,11 @@
 """
 Pads panel — the six BRIDGE CAST X control pads drawn as on the device, a
-sound for each, and where the sounds play.
+sound for each pad in each of BridgeMix's sound banks, and where sounds play.
 
 A sound pad sends its own MIDI CC (see bridgemix.device.pads); BridgeMix plays
-the file saved for that pad.  Every pad of every pad set can have its own
-sound; the tab shows the pads of the pad set that is active on the device.
-Click a pad to edit it; a pad lights up when you press it on the device.
+that pad's sound in the current bank.  Two bank pads (or the arrows here) step
+through the banks, which have no limit.  Click a pad to edit it; a pad lights
+up when you press it on the device.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
 _HINT_STYLE = "font-size: 12px; color: #9a9aa2; background-color: transparent;"
 _FILE_FILTER = "Sounds (" + " ".join(f"*{s}" for s in store.SUPPORTED_SUFFIXES) + ")"
 _SOUND_ITEM = "BridgeMix sound"
+_BANK_ITEMS = {"bank_prev": "BridgeMix: previous bank", "bank_next": "BridgeMix: next bank"}
 _COLUMNS = 2  # pads 1-2 on the first row, 3-4 on the second, 5-6 on the third
 _FLASH_MS = 300
 
@@ -204,10 +206,20 @@ class PadsPanel(QWidget):
             return 0
 
     def _key(self, number: int) -> str:
-        return store.pad_key(self._pad_set(), number)
+        """Settings key of pad *number*'s sound in the current bank."""
+        return store.pad_key(store.load().bank, number)
+
+    def _backup_key(self, number: int) -> str:
+        return store.backup_key(self._pad_set(), number)
+
+    def _is_managed(self, pad: pads.Pad) -> bool:
+        """True if BridgeMix set this pad's function (sound or bank pad)."""
+        return pad.is_sound_pad(self._pad_set()) or pad.bank_step is not None
 
     def _detail(self, pad: pads.Pad) -> str:
-        """What the pad does, for its tile: its sound or its device function."""
+        """What the pad does, for its tile: its sound, bank step or device function."""
+        if pad.bank_step is not None:
+            return "Previous bank" if pad.bank_step < 0 else "Next bank"
         if pad.is_sound_pad(self._pad_set()):
             sound = store.load().pads.get(self._key(pad.number))
             if sound and sound.file:
@@ -224,10 +236,38 @@ class PadsPanel(QWidget):
         lay.setSpacing(10)
 
         top = QHBoxLayout()
-        self._pad_set_lbl = QLabel()
-        self._pad_set_lbl.setStyleSheet("font-weight: 700; background: transparent;")
-        top.addWidget(self._pad_set_lbl)
+        top.setSpacing(8)
+        prev_bank = QPushButton("<")
+        prev_bank.setFixedWidth(36)
+        prev_bank.setToolTip("Previous bank")
+        prev_bank.clicked.connect(lambda: self._step_bank(-1))
+        top.addWidget(prev_bank)
+        self._bank_lbl = QLabel()
+        self._bank_lbl.setMinimumWidth(90)
+        self._bank_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._bank_lbl.setStyleSheet("font-weight: 700; background: transparent;")
+        top.addWidget(self._bank_lbl)
+        next_bank = QPushButton(">")
+        next_bank.setFixedWidth(36)
+        next_bank.setToolTip("Next bank")
+        next_bank.clicked.connect(lambda: self._step_bank(1))
+        top.addWidget(next_bank)
+        self._bank_name = QLineEdit()
+        self._bank_name.setPlaceholderText("Bank name")
+        self._bank_name.setMaximumWidth(180)
+        self._bank_name.editingFinished.connect(self._rename_bank)
+        top.addWidget(self._bank_name)
+        add_bank = QPushButton("Add bank")
+        add_bank.clicked.connect(self._add_bank)
+        top.addWidget(add_bank)
+        self._remove_bank_btn = QPushButton("Delete bank")
+        self._remove_bank_btn.setToolTip("Delete this bank and its sounds")
+        self._remove_bank_btn.clicked.connect(self._remove_bank)
+        top.addWidget(self._remove_bank_btn)
         top.addStretch()
+        self._pad_set_lbl = QLabel()
+        self._pad_set_lbl.setStyleSheet(_HINT_STYLE)
+        top.addWidget(self._pad_set_lbl)
         refresh = QPushButton("Read pads")
         refresh.setToolTip("Read the pads from the device again")
         refresh.clicked.connect(self._bridge.request_pads)
@@ -252,16 +292,68 @@ class PadsPanel(QWidget):
 
         lay.addWidget(
             _hint(
-                "Click a pad to set it up. Choose a file and the pad plays it: "
-                "BridgeMix keeps a copy (WAV, FLAC, OGG or MP3), and every pad of "
-                "every pad set can have its own sound. Switch pad sets on the device "
-                "to set up the others. The pad's previous function is kept, so "
-                "Remove or the function list gives it back. A pad lights up here "
-                "when you press it on the device."
+                "Click a pad to set it up. Choose a file and the pad plays it in the "
+                "current bank: BridgeMix keeps a copy (WAV, FLAC, OGG or MP3). Set two "
+                "pads to the previous and next bank to change banks from the device; "
+                "there is no limit on banks. A pad with a device function (SFX, "
+                "Reverb…) does the same in every bank. The pad's previous function is "
+                "kept, so Remove or the function list gives it back. A pad lights up "
+                "here when you press it on the device."
             )
         )
         self._update_pad_set_label()
+        self._show_bank()
         return grp
+
+    # ── banks ─────────────────────────────────────────────────────────────────
+
+    def _show_bank(self) -> None:
+        settings = store.load()
+        self._bank_lbl.setText(f"Bank {settings.bank + 1} / {settings.bank_count}")
+        self._bank_name.setText(settings.bank_name(settings.bank))
+        self._remove_bank_btn.setEnabled(settings.bank_count > 1)
+
+    def _bank_changed(self) -> None:
+        self._show_bank()
+        self._show_sound()
+        for number in self._tiles:
+            self._refresh_tile(number)
+
+    def _step_bank(self, step: int) -> None:
+        store.step_bank(step)
+        self._bank_changed()
+
+    def _add_bank(self) -> None:
+        settings = store.load()
+        settings.bank_count += 1
+        settings.bank = settings.bank_count - 1
+        store.save(settings)
+        self._bank_changed()
+
+    def _remove_bank(self) -> None:
+        settings = store.load()
+        if settings.bank_count <= 1:
+            return
+        name = settings.bank_name(settings.bank) or f"Bank {settings.bank + 1}"
+        answer = QMessageBox.question(
+            self, "Delete bank", f"Delete {name} and its sounds? This can't be undone."
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self._player is not None:
+            self._player.stop_all()
+        store.remove_bank(settings, settings.bank)
+        store.save(settings)
+        self._bank_changed()
+
+    def _rename_bank(self) -> None:
+        settings = store.load()
+        name = self._bank_name.text().strip()
+        if name:
+            settings.bank_names[str(settings.bank)] = name
+        else:
+            settings.bank_names.pop(str(settings.bank), None)
+        store.save(settings)
 
     def _make_editor(self) -> QGroupBox:
         self._editor = QGroupBox()
@@ -278,9 +370,9 @@ class PadsPanel(QWidget):
         self._file_lbl = QLabel("No sound")
         self._file_lbl.setMinimumWidth(160)
         sound_row.addWidget(self._file_lbl, stretch=1)
-        choose = QPushButton("Choose…")
-        choose.clicked.connect(self._choose)
-        sound_row.addWidget(choose)
+        self._choose_btn = QPushButton("Choose…")
+        self._choose_btn.clicked.connect(self._choose)
+        sound_row.addWidget(self._choose_btn)
         self._remove_btn = QPushButton("Remove")
         self._remove_btn.setToolTip("Remove the sound and give the pad its previous function back")
         self._remove_btn.clicked.connect(self._clear)
@@ -334,6 +426,14 @@ class PadsPanel(QWidget):
         self._volume.setValue(volume)
         self._volume_lbl.setText(f"{volume}%")
         self._press_again.setChecked(bool(sound and sound.press_again_stops))
+        pad = self._bridge.control_pads.get(self._selected)
+        is_bank_pad = pad is not None and pad.bank_step is not None
+        self._choose_btn.setEnabled(not is_bank_pad)
+        self._choose_btn.setToolTip(
+            "A bank pad has no sound: set its function to BridgeMix sound first"
+            if is_bank_pad
+            else ""
+        )
         can_play = self._player is not None and has_file
         self._play_btn.setEnabled(can_play)
         self._stop_btn.setEnabled(can_play)
@@ -351,15 +451,22 @@ class PadsPanel(QWidget):
             combo.setEnabled(False)
             combo.blockSignals(False)
             return
-        is_sound = pad.is_sound_pad(self._pad_set())
-        backup = store.load().pad_backup.get(self._key(pad.number))
-        if not is_sound:
+        backup = store.load().pad_backup.get(self._backup_key(pad.number))
+        if not self._is_managed(pad):
             combo.addItem(f"{pad.describe()} (device)", "keep")
-        elif backup is not None:
-            previous = pads.Pad(pad.number, "", *backup)
-            combo.addItem(f"{previous.describe()} (device)", "restore")
+            current = "keep"
+        else:
+            if backup is not None:
+                previous = pads.Pad(pad.number, "", *backup)
+                combo.addItem(f"{previous.describe()} (device)", "restore")
+            if pad.bank_step is not None:
+                current = "bank_prev" if pad.bank_step < 0 else "bank_next"
+            else:
+                current = "sound"
         combo.addItem(_SOUND_ITEM, "sound")
-        combo.setCurrentIndex(max(0, combo.findData("sound" if is_sound else "keep")))
+        for data, label in _BANK_ITEMS.items():
+            combo.addItem(label, data)
+        combo.setCurrentIndex(max(0, combo.findData(current)))
         combo.setEnabled(True)
         combo.blockSignals(False)
 
@@ -377,7 +484,7 @@ class PadsPanel(QWidget):
             self._bridge.request_pads()  # the device loaded the pads of that set
 
     def _update_pad_set_label(self) -> None:
-        self._pad_set_lbl.setText(f"Pad set {self._pad_set() + 1}")
+        self._pad_set_lbl.setText(f"Device pad set {self._pad_set() + 1}")
 
     def _on_pad(self, pad: pads.Pad) -> None:
         tile = self._tiles.get(pad.number)
@@ -386,6 +493,7 @@ class PadsPanel(QWidget):
         tile.set_pad(pad, self._detail(pad))
         if pad.number == self._selected:
             self._show_function()
+            self._show_sound()
 
     def _refresh_tile(self, number: int) -> None:
         pad = self._bridge.control_pads.get(number)
@@ -393,42 +501,55 @@ class PadsPanel(QWidget):
             self._tiles[number].set_pad(pad, self._detail(pad))
 
     def _on_control_change(self, channel: int, control: int, value: int) -> None:
-        found = pads.pad_for_cc(channel, control)
-        if found is not None and value and found[0] == self._pad_set():
-            self._tiles[found[1]].flash()
+        """A sound or bank pad was pressed on the device (the player acted first)."""
+        if not value:
+            return
+        for number, pad in self._bridge.control_pads.items():
+            if pad.midi_cc == (channel, control):
+                self._tiles[number].flash()
+        step = pads.bank_step_for_cc(channel, control)
+        if step is not None:
+            if self._player is None:  # no player to step the bank
+                store.step_bank(step)
+            self._bank_changed()
 
-    def _make_sound_pad(self, number: int) -> bool:
-        """Turn pad *number* into a sound pad, keeping its previous function."""
+    def _assign(self, number: int, kind: str) -> bool:
+        """Make pad *number* a sound pad or a bank pad, keeping its previous function."""
         pad = self._bridge.control_pads.get(number)
         if pad is None:
             return False
         pad_set = self._pad_set()
-        if pad.is_sound_pad(pad_set):
+        if kind == "sound":
+            function = pads.sound_pad_function(pad_set, number)
+        else:
+            function = pads.bank_pad_function(-1 if kind == "bank_prev" else 1)
+        if (pad.func, pad.opt1, pad.opt2) == function:
             return True
-        settings = store.load()
-        settings.pad_backup[self._key(number)] = [pad.func, pad.opt1, pad.opt2]
-        store.save(settings)
-        if not self._bridge.assign_pad(number, *pads.sound_pad_function(pad_set, number)):
+        if not self._is_managed(pad):
+            settings = store.load()
+            settings.pad_backup[self._backup_key(number)] = [pad.func, pad.opt1, pad.opt2]
+            store.save(settings)
+        if not self._bridge.assign_pad(number, *function):
             return False
         self._function.setEnabled(False)  # until the device reads back
         return True
 
     def _restore_pad(self, number: int) -> None:
-        """Give pad *number* its function from before it became a sound pad."""
+        """Give pad *number* its function from before BridgeMix changed it."""
         settings = store.load()
-        backup = settings.pad_backup.get(self._key(number))
+        backup = settings.pad_backup.get(self._backup_key(number))
         if backup is None:
             return
         if self._bridge.assign_pad(number, *backup):
-            settings.pad_backup.pop(self._key(number), None)
+            settings.pad_backup.pop(self._backup_key(number), None)
             store.save(settings)
             self._function.setEnabled(False)
 
     def _on_function(self) -> None:
         number = self._selected
         choice = self._function.currentData()
-        if choice == "sound":
-            ok = self._make_sound_pad(number)
+        if choice in ("sound", *_BANK_ITEMS):
+            ok = self._assign(number, choice)
         elif choice == "restore":
             self._restore_pad(number)
             ok = True
@@ -453,11 +574,17 @@ class PadsPanel(QWidget):
             QMessageBox.critical(self, "Sound not added", f"Could not copy the file:\n{exc}")
             return
         settings = store.load()
-        settings.pads.setdefault(key, store.PadSound()).file = str(copy)
+        sound = settings.pads.setdefault(key, store.PadSound())
+        previous, sound.file = sound.file, str(copy)
         store.save(settings)
+        if previous != sound.file:
+            store.remove_file(previous)
         self._show_sound()
         self._refresh_tile(number)
-        if not self._make_sound_pad(number):
+        pad = self._bridge.control_pads.get(number)
+        if pad is not None and pad.is_sound_pad(self._pad_set()):
+            return
+        if not self._assign(number, "sound"):
             QMessageBox.warning(
                 self,
                 "Pad not changed",
@@ -470,13 +597,17 @@ class PadsPanel(QWidget):
         key = self._key(number)
         if self._player is not None:
             self._player.stop(key)
-        store.remove_file(key)
         settings = store.load()
-        settings.pads.pop(key, None)
+        sound = settings.pads.pop(key, None)
         store.save(settings)
+        if sound is not None:
+            store.remove_file(sound.file)
         self._show_sound()
         self._refresh_tile(number)
-        self._restore_pad(number)
+        if not any(
+            k.endswith(f":{number}") and s.file for k, s in store.load().pads.items()
+        ):  # no other bank uses this pad: give it its function back
+            self._restore_pad(number)
 
     def _preview(self) -> None:
         if self._player is not None:
