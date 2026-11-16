@@ -356,8 +356,9 @@ class PadsPanel(QWidget):
         settings.bank = bank % settings.bank_count
         store.save(settings)
         self._bridge.recall_pad_set(settings.bank_pad_set(settings.bank))
-        if settings.bank_colors.get(str(settings.bank)):
-            QTimer.singleShot(150, self._apply_bank_colors)  # after the device loaded the set
+        # The device handles messages in order and loads a pad set in about 5 ms,
+        # so the colours can follow the recall at once (measured on FW 3.00).
+        self._apply_bank_colors()
         self._bank_changed()
 
     def _apply_bank_colors(self) -> None:
