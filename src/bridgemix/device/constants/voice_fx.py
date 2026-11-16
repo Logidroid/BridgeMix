@@ -9,15 +9,6 @@ or SECTION_VOICE_FX (0x7F) with TYPE_VOICE_FX (0x7F) for preset management.
 ADDR_VOICE_PITCH: int = 0x20  # range 0x00–0x7F
 ADDR_VOICE_FORMAT: int = 0x22  # range 0x00–0x7F
 ADDR_VOICE_MODE: int = 0x2C
-# Voice transformer extras, in the protocol dataset but not in Roland's X manual.
-# On a BRIDGE CAST X (FW 3.00) they change the voice clearly only while the
-# voice transformer (ADDR_VT_SWITCH) is on.
-ADDR_VT_ROBOT_SWITCH: int = 0x24
-ADDR_VT_MEGAPHONE_SWITCH: int = 0x26
-ADDR_VT_ROBOT_VARIATION: int = 0x28  # 0-3
-ADDR_VT_MEGAPHONE_VARIATION: int = 0x2A  # 0-3
-ADDR_VT_SWITCH: int = 0x2E
-VT_VARIATION_MAX: int = 3
 VOICE_MODE_AVATAR: int = 0x00
 VOICE_MODE_SING: int = 0x01
 

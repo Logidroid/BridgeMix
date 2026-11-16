@@ -29,12 +29,7 @@ from PyQt6.QtWidgets import (
 if TYPE_CHECKING:
     from bridgemix.device.bridge_cast import BridgeCast
 
-from bridgemix.gui.widgets.controls import (
-    LabeledSlider,
-    ParamToggle,
-    ScrollGuardComboBox,
-    ToggleSwitch,
-)
+from bridgemix.gui.widgets.controls import LabeledSlider, ParamToggle
 from bridgemix.gui.widgets.profile_widget import ProfileWidget
 
 
@@ -225,47 +220,11 @@ class MicSfxPanel(QWidget):
 
         lay.addWidget(LabeledSlider("PITCH", "voice_pitch", b, 0, 127, _fmt_voice))
         lay.addWidget(LabeledSlider("FORMANT", "voice_format", b, 0, 127, _fmt_voice))
-
-        # Robot / Megaphone: in the protocol dataset but not in Roland's X manual.
-        self._vt_rows: dict[str, tuple[ToggleSwitch, ScrollGuardComboBox]] = {}
-        for label, effect in (("ROBOT", "robot"), ("MEGAPHONE", "megaphone")):
-            row = QHBoxLayout()
-            name = QLabel(label)
-            name.setStyleSheet(
-                "font-size: 10px; color: #7a7a82; letter-spacing: 0.04em;"
-                " background-color: transparent;"
-            )
-            name.setMinimumWidth(80)
-            row.addWidget(name)
-            variation = ScrollGuardComboBox()
-            variation.addItems([f"Variation {i}" for i in range(1, 5)])
-            variation.setCurrentIndex(b.get_parameter(f"vt_{effect}_variation"))
-            variation.currentIndexChanged.connect(
-                lambda i, e=effect: self._bridge.set_parameter(f"vt_{e}_variation", i)
-            )
-            row.addWidget(variation, stretch=1)
-            switch = ToggleSwitch(bool(b.get_parameter(f"vt_{effect}_switch")))
-            switch.toggled.connect(lambda on, e=effect: self._on_vt_effect(e, on))
-            row.addWidget(switch)
-            lay.addLayout(row)
-            self._vt_rows[effect] = (switch, variation)
-        vt_hint = QLabel("Robot and Megaphone also need Enable on.")
-        vt_hint.setStyleSheet("font-size: 11px; color: #7a7a82; background-color: transparent;")
-        lay.addWidget(vt_hint)
         # Trailing stretch so extra vertical height collects at the bottom rather
         # than inflating the Enable toggle row (matches the Reverb group).
         lay.addStretch()
 
         return grp
-
-    def _on_vt_effect(self, effect: str, on: bool) -> None:
-        """Robot / Megaphone on or off.  They act through the voice transformer,
-        which is turned on with them and off once neither is on."""
-        b = self._bridge
-        b.set_parameter(f"vt_{effect}_switch", int(on))
-        either = b.get_parameter("vt_robot_switch") or b.get_parameter("vt_megaphone_switch")
-        if b.get_parameter("vt_switch") != int(bool(either)):
-            b.set_parameter("vt_switch", int(bool(either)))
 
     def _on_voice_mode(self, id_: int, checked: bool) -> None:
         if checked:
@@ -289,15 +248,6 @@ class MicSfxPanel(QWidget):
     # ── Shared parameter-changed handler ─────────────────────────────────────
 
     def _on_param_changed(self, name: str, value: int) -> None:
-        for effect, (switch, variation) in getattr(self, "_vt_rows", {}).items():
-            if name == f"vt_{effect}_switch" and switch.isChecked() != bool(value):
-                switch.blockSignals(True)
-                switch.setChecked(bool(value))
-                switch.blockSignals(False)
-            elif name == f"vt_{effect}_variation" and variation.currentIndex() != value:
-                variation.blockSignals(True)
-                variation.setCurrentIndex(value)
-                variation.blockSignals(False)
         if name == "voice_mode":
             btn = self._rb_sing if value else self._rb_avatar
             btn.blockSignals(True)
