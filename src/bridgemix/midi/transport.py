@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 _CLOSE_TIMEOUT_S = 1.0
 
 SysExCallback = Callable[[tuple[int, ...]], None]
+ControlChangeCallback = Callable[[int, int, int], None]  # channel, control, value
 
 
 class MidiTransport:
@@ -36,6 +37,10 @@ class MidiTransport:
         self._out: Any | None = None
         self._in: Any | None = None
         self._callback: SysExCallback | None = None
+        # The device's other input ports (e.g. "MIDI 2" / CTRL on a BRIDGE CAST X):
+        # its control pads send MIDI CC there, not on the SysEx port.
+        self._aux_in: list[Any] = []
+        self._cc_callback: ControlChangeCallback | None = None
 
     # ── Connection ────────────────────────────────────────────────────────────
 
@@ -56,6 +61,21 @@ class MidiTransport:
             raise
         log.info("MIDI open: TX=%s  RX=%s", tx_name, rx_name)
 
+    def listen_control_changes(
+        self, port_names: list[str], callback: ControlChangeCallback
+    ) -> None:
+        """Deliver control changes from the RX port and from *port_names*.
+
+        A port that fails to open is skipped: control changes are optional.
+        """
+        self._cc_callback = callback
+        for name in port_names:
+            try:
+                self._aux_in.append(mido.open_input(name, callback=self._mido_callback))
+                log.info("MIDI open: control changes from %s", name)
+            except Exception as exc:
+                log.warning("Could not open MIDI input %s: %s", name, exc)
+
     def close(self) -> None:
         """Close both ports without ever blocking the calling (GUI) thread.
 
@@ -69,18 +89,22 @@ class MidiTransport:
         # Clear our own callback ref first so _mido_callback becomes a no-op
         # immediately, regardless of what the port teardown does.
         self._callback = None
+        self._cc_callback = None
         in_port, out_port = self._in, self._out
+        aux_ports, self._aux_in = self._aux_in, []
         self._in = None
         self._out = None
-        if in_port is None and out_port is None:
+        if in_port is None and out_port is None and not aux_ports:
             return
 
         def _do_close() -> None:
-            if in_port is not None:
+            for port in [in_port, *aux_ports]:
+                if port is None:
+                    continue
                 with contextlib.suppress(Exception):
-                    in_port.callback = None
+                    port.callback = None
                 with contextlib.suppress(Exception):
-                    in_port.close()
+                    port.close()
             if out_port is not None:
                 with contextlib.suppress(Exception):
                     out_port.close()
@@ -119,5 +143,10 @@ class MidiTransport:
         if msg.type == "sysex" and self._callback is not None:
             try:
                 self._callback(tuple(msg.data))
+            except Exception as exc:
+                log.warning("RX callback error: %s", exc)
+        elif msg.type == "control_change" and self._cc_callback is not None:
+            try:
+                self._cc_callback(msg.channel, msg.control, msg.value)
             except Exception as exc:
                 log.warning("RX callback error: %s", exc)

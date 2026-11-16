@@ -1,6 +1,6 @@
 """
-Sound pads: sounds A-D that BridgeMix plays when a SOUND EFFECTS pad (BRIDGE
-CAST X) or button asks the host for one.
+Sound pads: a BRIDGE CAST X control pad can play a sound that BridgeMix keeps.
+Every pad of every pad set can have its own sound.
 
   store   — sound files and settings (sounds.json)
   player  — playback through PipeWire, also sent to voice chat apps

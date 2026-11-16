@@ -38,6 +38,19 @@ def find_midi_ports() -> tuple[str | None, str | None]:
         return None, None
 
 
+def companion_inputs(rx_name: str) -> list[str]:
+    """The device's input ports other than *rx_name* (the SysEx port).
+
+    A BRIDGE CAST X sends the MIDI CC of its control pads on its second port
+    ("MIDI 2" on Linux, CTRL on Windows), not on the one that carries SysEx.
+    """
+    try:
+        names = mido.get_input_names()
+    except Exception:
+        return []
+    return [n for n in names if _KEYWORD in n.upper() and n != rx_name]
+
+
 def find_device() -> tuple[str | None, str | None]:
     """High-level helper: return (tx, rx) if device is detectable, else (None, None)."""
     tx, rx = find_midi_ports()

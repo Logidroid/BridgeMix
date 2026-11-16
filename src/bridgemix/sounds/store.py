@@ -1,19 +1,21 @@
 """
-Sound pad settings: the four sounds (A-D), where they play, and the pad
+Sound pad settings: the sound of each pad, where sounds play, and the pad
 functions BridgeMix replaced.
 
-The sound files are copied into ``data_dir()/sounds`` so a sound keeps working
-if the original file is moved.  Settings live in ``config_dir()/sounds.json``::
+Every pad of every pad set can have its own sound; there is no other limit.
+The files are copied into ``data_dir()/sounds`` so a sound keeps working if the
+original file is moved.  Settings live in ``config_dir()/sounds.json``::
 
     {
-      "slots": [{"file": ".../A-airhorn.wav", "volume": 80, "play_to_end": true}, ...],
+      "pads": {"0:3": {"file": ".../set1-pad3-airhorn.wav", "volume": 80,
+                       "press_again_stops": false}},
       "channel": "System",
       "voice_apps": ["Discord"],
       "pad_backup": {"0:3": [4097, 2, 0]}
     }
 
-``pad_backup`` keeps a pad's previous function ("pad set:pad" -> function word,
-option 1, option 2) so the pads tab can give it back.
+Keys are "pad set:pad" (pad set 0-4, pad 1-6).  ``pad_backup`` keeps a pad's
+previous function (function word, option 1, option 2) so it can be given back.
 """
 
 from __future__ import annotations
@@ -28,7 +30,6 @@ from bridgemix.paths import config_dir, data_dir
 
 log = logging.getLogger(__name__)
 
-SLOT_COUNT = 4
 SUPPORTED_SUFFIXES = (".wav", ".flac", ".ogg", ".oga", ".mp3")
 
 
@@ -40,19 +41,39 @@ def sounds_dir() -> Path:
     return data_dir() / "sounds"
 
 
+def pad_key(pad_set: int, pad: int) -> str:
+    return f"{pad_set}:{pad}"
+
+
+def _file_prefix(key: str) -> str:
+    pad_set, pad = key.split(":")
+    return f"set{int(pad_set) + 1}-pad{pad}-"
+
+
 @dataclass
-class Slot:
+class PadSound:
     file: str = ""  # copy in sounds_dir(), "" = no sound
     volume: int = 80  # 0-100
-    play_to_end: bool = True  # False: stop when the pad is released
+    press_again_stops: bool = False  # False: pressing again restarts the sound
 
 
 @dataclass
 class SoundSettings:
-    slots: list[Slot] = field(default_factory=lambda: [Slot() for _ in range(SLOT_COUNT)])
+    pads: dict[str, PadSound] = field(default_factory=dict)
     channel: str = "System"  # Bridge Cast channel the sounds play on
     voice_apps: list[str] = field(default_factory=lambda: ["Discord"])
     pad_backup: dict[str, list[int]] = field(default_factory=dict)
+
+
+def _pad_sound(raw: object) -> PadSound | None:
+    if not isinstance(raw, dict):
+        return None
+    volume = raw.get("volume", 80)
+    return PadSound(
+        file=str(raw.get("file") or ""),
+        volume=max(0, min(100, volume)) if isinstance(volume, int) else 80,
+        press_again_stops=bool(raw.get("press_again_stops", False)),
+    )
 
 
 def load() -> SoundSettings:
@@ -68,16 +89,12 @@ def load() -> SoundSettings:
         return SoundSettings()
 
     settings = SoundSettings()
-    slots = raw.get("slots")
-    if isinstance(slots, list):
-        for i, s in enumerate(slots[:SLOT_COUNT]):
-            if isinstance(s, dict):
-                volume = s.get("volume", 80)
-                settings.slots[i] = Slot(
-                    file=str(s.get("file") or ""),
-                    volume=max(0, min(100, volume)) if isinstance(volume, int) else 80,
-                    play_to_end=bool(s.get("play_to_end", True)),
-                )
+    pads = raw.get("pads")
+    if isinstance(pads, dict):
+        for key, value in pads.items():
+            sound = _pad_sound(value)
+            if isinstance(key, str) and sound is not None:
+                settings.pads[key] = sound
     if isinstance(raw.get("channel"), str):
         settings.channel = raw["channel"]
     apps = raw.get("voice_apps")
@@ -86,7 +103,7 @@ def load() -> SoundSettings:
     backup = raw.get("pad_backup")
     if isinstance(backup, dict):
         settings.pad_backup = {
-            k: [int(x) for x in v]
+            k: list(v)
             for k, v in backup.items()
             if isinstance(v, list) and len(v) == 3 and all(isinstance(x, int) for x in v)
         }
@@ -99,25 +116,33 @@ def save(settings: SoundSettings) -> None:
     path.write_text(json.dumps(asdict(settings), indent=2), encoding="utf-8")
 
 
-def import_file(slot: int, source: Path) -> Path:
-    """Copy *source* into sounds_dir() for *slot* and return the copy.
+def import_file(key: str, source: Path) -> Path:
+    """Copy *source* into sounds_dir() for pad *key* and return the copy.
 
-    The slot's previous copy is removed.  Raises OSError if the copy fails.
+    The pad's previous copy is removed.  Raises OSError if the copy fails.
     """
-    letter = "ABCD"[slot]
     folder = sounds_dir()
     folder.mkdir(parents=True, exist_ok=True)
-    for old in folder.glob(f"{letter}-*"):
-        old.unlink(missing_ok=True)
-    dest = folder / f"{letter}-{source.name}"
-    shutil.copyfile(source, dest)
+    prefix = _file_prefix(key)
+    dest = folder / f"{prefix}{source.name}"
+    tmp = dest.with_name(dest.name + ".part")
+    shutil.copyfile(source, tmp)
+    for old in folder.glob(f"{prefix}*"):
+        if old != tmp:
+            old.unlink(missing_ok=True)
+    tmp.rename(dest)
     return dest
 
 
-def remove_file(slot: int) -> None:
-    for old in sounds_dir().glob(f"{'ABCD'[slot]}-*"):
+def remove_file(key: str) -> None:
+    for old in sounds_dir().glob(f"{_file_prefix(key)}*"):
         old.unlink(missing_ok=True)
 
 
-def backup_key(pad_set: int, pad: int) -> str:
-    return f"{pad_set}:{pad}"
+def display_name(file: str) -> str:
+    """'…/set1-pad3-airhorn.wav' -> 'airhorn.wav'."""
+    name = Path(file).name
+    parts = name.split("-", 2)
+    if len(parts) == 3 and parts[0].startswith("set") and parts[1].startswith("pad"):
+        return parts[2]
+    return name

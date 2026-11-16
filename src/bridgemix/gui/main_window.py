@@ -387,10 +387,10 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(PluginsPanel(self._plugin_manager))  # 8 — plugins host
         self._stack.addWidget(MidiMonitor(b))  # 9 — MIDI debug
 
-        # Sounds A-D for SOUND EFFECTS pads: played here, also into voice chat.
+        # Sound pads: a pad's MIDI CC plays its sound here, also into voice chat.
         self._sound_player = sound_player.SoundPlayer() if sound_player.available() else None
         if self._sound_player is not None:
-            b.sound_effect_requested.connect(self._sound_player.handle)
+            b.control_change.connect(self._sound_player.handle_control_change)
         self._stack.addWidget(PadsPanel(b, self._sound_player))  # 10 — sound pads
 
         self._overlay = _DisconnectOverlay(self._stack)

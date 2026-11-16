@@ -24,6 +24,7 @@ from bridgemix.device.parameters import (
     X_STRIP_PARAMS,
     lookup_by_address,
 )
+from bridgemix.midi.detector import companion_inputs
 from bridgemix.midi.sysex import (
     build_heartbeat_rq1,
     build_identity_request,
@@ -108,12 +109,13 @@ class BridgeCast(QObject):
     profile_names_updated = pyqtSignal(list)  # list[str] — 5 device profile names
     game_eq_preset_names_updated = pyqtSignal(list)  # list[str] — 5 Game EQ preset slot names
     pad_changed = pyqtSignal(object)  # pads.Pad, read from the device (BRIDGE CAST X)
-    # A SOUND EFFECTS pad or button was pressed (True) or released (False):
-    # the device asks the host to play sound slot n (0 = A).
-    sound_effect_requested = pyqtSignal(int, bool)
+    # MIDI control change from the device (channel 0-15, control, value), e.g. a
+    # control pad set to MIDI CC.  Emitted on the Qt main thread.
+    control_change = pyqtSignal(int, int, int)
 
-    # Internal signal for thread-bouncing mido callback → Qt main thread
+    # Internal signals for thread-bouncing mido callbacks → Qt main thread
     _sysex_received_internal = pyqtSignal(tuple)
+    _cc_received_internal = pyqtSignal(int, int, int)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -160,6 +162,9 @@ class BridgeCast(QObject):
         self._sysex_received_internal.connect(
             self._on_sysex_received, Qt.ConnectionType.QueuedConnection
         )
+        self._cc_received_internal.connect(
+            self.control_change.emit, Qt.ConnectionType.QueuedConnection
+        )
 
         # Re-emit hw_strip_assignment_changed whenever a strip assignment param changes
         self.parameter_changed.connect(self._on_strip_param_changed)
@@ -177,6 +182,9 @@ class BridgeCast(QObject):
             self.status_message.emit(f"Connection failed: {exc}")
             return False
 
+        self._transport.listen_control_changes(
+            companion_inputs(rx_port), self._cc_received_internal.emit
+        )
         self._is_connected = True
         self._last_rx = time.monotonic()
         self._stereo_meters.clear()  # the firmware may have changed since the last connection
@@ -676,15 +684,6 @@ class BridgeCast(QObject):
         addr_lo = frame["addr_lo"]
 
         if cmd == 0x12:  # DT1 (device → host)
-            if (
-                sec == 0x7F
-                and type_ == 0x7F
-                and addr_hi in (pads.CMD_SOUND_EFFECT_PLAY, pads.CMD_SOUND_EFFECT_STOP)
-                and "value" in frame
-            ):
-                slot = (addr_lo << 7) | frame["value"]
-                self.sound_effect_requested.emit(slot, addr_hi == pads.CMD_SOUND_EFFECT_PLAY)
-                return
             if (
                 sec == C.SECTION_CHANNEL
                 and pads.TYPE_PADS_FIRST <= type_ < pads.TYPE_PADS_FIRST + pads.PAD_COUNT // 2

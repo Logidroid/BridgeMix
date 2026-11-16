@@ -1,6 +1,9 @@
 """
 Plays the sound pads' sounds through PipeWire.
 
+A sound pad (see bridgemix.device.pads) sends its own MIDI CC when pressed;
+handle_control_change() plays the sound saved for that pad.
+
 A sound plays with ``pw-play`` on a Bridge Cast channel (System by default, as
 Roland's app does), so you hear it and the STREAM mix gets it.  It is also
 linked straight into the recording streams of the chosen voice chat apps
@@ -23,6 +26,7 @@ import threading
 import time
 from pathlib import Path
 
+from bridgemix.device import pads
 from bridgemix.routing import backend
 from bridgemix.sounds import store
 
@@ -85,48 +89,59 @@ def recording_ports(apps: list[str]) -> list[tuple[int, str]]:
 
 
 class SoundPlayer:
-    """Starts and stops the sounds A-D (slot 0-3), one playback per slot."""
+    """Plays one sound per pad; a pad pressed again restarts or stops its sound."""
 
     def __init__(self) -> None:
-        self._procs: dict[int, subprocess.Popen] = {}
+        self._procs: dict[str, subprocess.Popen] = {}
         self._lock = threading.Lock()
         self._counter = itertools.count(1)
 
-    def handle(self, slot: int, pressed: bool) -> None:
-        """Pad pressed: play the sound.  Released: stop it unless it plays to the end."""
-        if not 0 <= slot < store.SLOT_COUNT:
+    def handle_control_change(self, channel: int, control: int, value: int) -> None:
+        """A sound pad sends its own CC (value 127) when pressed."""
+        found = pads.pad_for_cc(channel, control)
+        if found is None or value == 0:
             return
-        if pressed:
-            self.play(slot)
-        elif not store.load().slots[slot].play_to_end:
-            self.stop(slot)
+        key = store.pad_key(*found)
+        sound = store.load().pads.get(key)
+        if sound is None or not sound.file:
+            log.info("Pad %s of pad set %d has no sound", found[1], found[0] + 1)
+            return
+        if sound.press_again_stops and self.is_playing(key):
+            self.stop(key)
+        else:
+            self.play(key)
 
-    def play(self, slot: int, *, voice_chat: bool = True) -> None:
-        """Play *slot*; *voice_chat* False plays it only locally (preview)."""
-        threading.Thread(target=self._play, args=(slot, voice_chat), daemon=True).start()
+    def play(self, key: str, *, voice_chat: bool = True) -> None:
+        """Play the sound of pad *key*; *voice_chat* False plays it only here (preview)."""
+        threading.Thread(target=self._play, args=(key, voice_chat), daemon=True).start()
 
-    def stop(self, slot: int) -> None:
+    def is_playing(self, key: str) -> bool:
         with self._lock:
-            proc = self._procs.pop(slot, None)
+            proc = self._procs.get(key)
+        return proc is not None and proc.poll() is None
+
+    def stop(self, key: str) -> None:
+        with self._lock:
+            proc = self._procs.pop(key, None)
         if proc is not None and proc.poll() is None:
             proc.terminate()
 
     def stop_all(self) -> None:
-        for slot in list(self._procs):
-            self.stop(slot)
+        for key in list(self._procs):
+            self.stop(key)
 
     # ── worker thread ─────────────────────────────────────────────────────────
 
-    def _play(self, slot: int, voice_chat: bool) -> None:
+    def _play(self, key: str, voice_chat: bool) -> None:
         settings = store.load()
-        sound = settings.slots[slot]
-        if not sound.file or not Path(sound.file).is_file():
-            log.info("Sound %s has no file", "ABCD"[slot])
+        sound = settings.pads.get(key)
+        if sound is None or not Path(sound.file).is_file():
+            log.info("No sound file for pad %s", key)
             return
-        self.stop(slot)  # pressing again restarts the sound
+        self.stop(key)  # pressing again restarts the sound
 
-        name = f"{NODE_PREFIX}-{'ABCD'[slot]}-{next(self._counter)}"
-        props = f'{{ node.name = "{name}" media.name = "BridgeMix sound {"ABCD"[slot]}" }}'
+        name = f"{NODE_PREFIX}-{key.replace(':', '-')}-{next(self._counter)}"
+        props = f'{{ node.name = "{name}" media.name = "BridgeMix pad sound" }}'
         cmd = ["pw-play", "--volume", f"{sound.volume / 100:.2f}", "-P", props]
         target = backend.resolve_target(settings.channel, backend.list_targets())
         if target is not None:
@@ -136,10 +151,10 @@ class SoundPlayer:
                 [*cmd, sound.file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
         except OSError as exc:
-            log.warning("Could not play sound %s: %s", "ABCD"[slot], exc)
+            log.warning("Could not play the sound of pad %s: %s", key, exc)
             return
         with self._lock:
-            self._procs[slot] = proc
+            self._procs[key] = proc
         if voice_chat and settings.voice_apps:
             self._link_to_apps(name, settings.voice_apps, proc)
 
