@@ -343,6 +343,7 @@ class MainWindow(QMainWindow):
         vlay.setSpacing(2)
 
         self._nav_btns: list[QPushButton] = []
+        self._nav_pages: list[int] = []  # stack index of each button (not its position)
         pages = [
             ("MIXER", 0),
             ("MIC SET.", 1),
@@ -365,6 +366,7 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(lambda _, i=idx: self._switch_page(i))
             vlay.addWidget(btn)
             self._nav_btns.append(btn)
+            self._nav_pages.append(idx)
 
         vlay.addStretch()
         self._nav_btns[0].setChecked(True)
@@ -407,8 +409,8 @@ class MainWindow(QMainWindow):
 
     def _switch_page(self, idx: int) -> None:
         self._stack.setCurrentIndex(idx)
-        for i, btn in enumerate(self._nav_btns):
-            btn.setChecked(i == idx)
+        for btn, page in zip(self._nav_btns, self._nav_pages, strict=True):
+            btn.setChecked(page == idx)
         if self._overlay.isVisible():
             self._overlay.raise_()
 
