@@ -830,13 +830,13 @@ class BridgeCast(QObject):
         instead of their stored colours, changing each pad's light only once.
 
         The device lights the pads one after the other when it loads a pad set,
-        so recalling it and then writing the colours made the pads change twice.
-        Instead:
-        - already on *pad_set*: only the colours that differ are written;
-        - otherwise *colors* go into the pad set's memory, the set is recalled
-          (it loads them), and the stored colours are written back to the
-          memory at once.  The device handles messages in order, so the memory
-          holds the bank colours only while the recall runs.
+        and more slowly still when colours are written to the current pads one
+        word at a time, so recalling the set and then writing the colours made
+        the pads change twice, slowly.  Instead *colors* go into the pad set's
+        memory, the set is recalled (it loads them) and the stored colours are
+        written back to the memory at once.  The device handles messages in
+        order, so the memory holds the bank colours only while the recall runs.
+        This is done even when the pad set is already loaded.
         """
         if not self._is_connected or not self.is_bridge_cast_x:
             return
@@ -845,24 +845,13 @@ class BridgeCast(QObject):
             for n in range(1, pads.PAD_COUNT + 1)
             if (pad_set, n) in self._pad_memory
         }
-        current = self._state.get("pad_set_no", 0)
         if (
-            pad_set == current
+            pad_set == self._state.get("pad_set_no", 0)
             and len(stored) == pads.PAD_COUNT
             and len(self._pads) == pads.PAD_COUNT
+            and all(self._pads[n].color == colors.get(n, stored[n]) for n in stored)
         ):
-            changed = []
-            for n in range(1, pads.PAD_COUNT + 1):
-                want = colors.get(n, stored[n])
-                if self._pads[n].color != want:
-                    type_, base = pads.pad_location(n)
-                    self._write_color(C.SECTION_CHANNEL, type_, base, want)
-                    changed.append(n)
-            for i, n in enumerate(changed):  # read them back
-                type_, base = pads.pad_location(n)
-                frame = build_read(C.SECTION_CHANNEL, type_, base, 0x00, pads.PAD_SIZE)
-                QTimer.singleShot(50 + i * 5, lambda f=frame: self._send_raw(f))
-            return
+            return  # already showing exactly that: no reload
         if all(n in stored for n in colors):
             for n, rgb in colors.items():
                 self._write_color(
