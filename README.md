@@ -18,6 +18,22 @@
 </div>
 
 ---
+
+## About this fork
+
+This is a fork of [Ex0danify/BridgeMix](https://github.com/Ex0danify/BridgeMix) focused on
+the **Roland BRIDGE CAST X**. It is tested on a BRIDGE CAST X with firmware 1.02 (build 67)
+on Linux. The rest of this README is the original project's.
+
+Changes from the original project:
+
+| Area | Change |
+|---|---|
+| **BRIDGE CAST X knobs** | The four knobs are freely assignable, as in Roland's app. BridgeMix now writes the X's own knob registers (`7F 03 08 60`–`66`) instead of the base model's, so changing a knob source takes effect on the device. INPUTS shows the X layout (MIC, CHAT, HDMI, GAME) and offers HDMI as a source on every knob. |
+| **BRIDGE CAST X meters** | The X reports a single level for the CHAT, GAME and MUSIC inputs. It is now shown on both bars instead of leaving the right bar at zero. |
+| **App Audio Routing** | The channel list is refreshed while the panel is open. It follows the device's audio outputs when they appear or change (device plugged in, card profile switched) instead of keeping the list read at startup. |
+
+---
 > **Notice on AI:** Parts of this project were developed with AI assistance. 
 > The code has been reviewed and curated by the maintainer, but you may encounter rough edges. Bug reports are welcome.
 
