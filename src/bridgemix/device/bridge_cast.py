@@ -128,6 +128,7 @@ class BridgeCast(QObject):
         # Firmware-echo model code (0x01 = BRIDGE CAST X). Decides which address
         # block the four physical knobs are read from and written to.
         self._model_code: int | None = None
+        self._port_is_x = False  # the MIDI port is named "BRIDGE CAST X…"
         self._voice_preset_names: list[str] = [f"Preset {i + 1}" for i in range(5)]
         self._profile_names: list[str] = [f"Profile {i + 1}" for i in range(5)]
         self._game_eq_preset_names: list[str] = [f"Game EQ {i + 1}" for i in range(5)]
@@ -182,6 +183,7 @@ class BridgeCast(QObject):
             self.status_message.emit(f"Connection failed: {exc}")
             return False
 
+        self._port_is_x = "BRIDGE CAST X" in f"{tx_port} {rx_port}".upper()
         self._transport.listen_control_changes(
             companion_inputs(rx_port), self._cc_received_internal.emit
         )
@@ -386,8 +388,13 @@ class BridgeCast(QObject):
 
     @property
     def is_bridge_cast_x(self) -> bool:
-        """True once the firmware echo has identified a BRIDGE CAST X."""
-        return self._model_code == C.MODEL_CODE_BRIDGE_CAST_X
+        """True if the MIDI port name or the firmware echo says BRIDGE CAST X.
+
+        The port name comes first: on FW 3.00 the echo byte read as the model
+        code is 0x03 (it follows the firmware), so an X updated to 3.00 would
+        pass for a BRIDGE CAST V2.  Its ports are still named "BRIDGE CAST X…".
+        """
+        return self._port_is_x or self._model_code == C.MODEL_CODE_BRIDGE_CAST_X
 
     def set_hw_strip_channel(self, strip_index: int, ch_key: str) -> None:
         """Write hardware strip channel assignment to device (strip_index 0-3)."""
@@ -842,6 +849,8 @@ class BridgeCast(QObject):
 
         firmware = f"{major}.{minor:02d} ({build})"
         model = self._ECHO_MODEL_CODES.get(model_code, f"Unknown (code=0x{model_code:02X})")
+        if self._port_is_x:
+            model = self._ECHO_MODEL_CODES[C.MODEL_CODE_BRIDGE_CAST_X]
 
         info = (model, firmware)
         if info == self._device_info:
