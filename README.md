@@ -26,6 +26,14 @@ the **Roland BRIDGE CAST X**. It is tested on a BRIDGE CAST X with firmware 1.02
 on Linux. The rest of this README comes from the original project; its links point to this
 fork.
 
+> **Why firmware 1.02?** Roland updates the X's firmware only from its Windows and macOS app.
+> The [firmware download page](https://www.roland.com/global/support/by_product/bridge_cast_x/updates_drivers/ee518cda-d94c-447b-b2ff-bfb6c6192d93/)
+> has nothing to download: it tells you to install the app. The app's own changelog for
+> version 4.01 then says: *"Fixed an issue that prevented connection to BRIDGE CAST X
+> Ver. 1.02."* My Windows 11 PC never got through that update, so this X stays on 1.02,
+> and this fork makes it work on Linux instead. No driver to install, no "Version mismatch"
+> pop-up.
+
 Changes from the original project:
 
 | Area | Change |
@@ -136,11 +144,16 @@ wants a free, scriptable alternative to the stock app.
 </details>
 
 ## Install & Run
-This software was developed on an original Roland Bridge Cast. The compatibility to the Bridge Cast X and BridgeCast ONE is not guaranteed.
+The original project was developed on an original Roland BRIDGE CAST. This fork is tested on
+a BRIDGE CAST X. The BRIDGE CAST ONE is not tested.
 
 **Requirements:**
 
-- A **Roland Bridge Cast** (original, V2) on **FW 3.00 (115)**
+- A **Roland BRIDGE CAST** (original, V2) on **FW 3.00 (115)**, or a **BRIDGE CAST X**
+  (USB ID `0582:02e8`) on **FW 1.02 (67)**, the firmware this fork is tested on. Newer X
+  firmware is not tested.
+- On Linux with a BRIDGE CAST X: the audio profile described in
+  [BRIDGE CAST X on Linux](#bridge-cast-x-on-linux-separate-channels)
 - **Python 3.11+**, or conda
 
 ```bash
