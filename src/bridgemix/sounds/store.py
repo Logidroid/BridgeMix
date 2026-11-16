@@ -3,9 +3,15 @@ Sound pad settings: BridgeMix's sound banks, the sound of each pad in each
 bank, where sounds play, and the pad functions BridgeMix replaced.
 
 There is no limit on banks: the bank pads (or the tab) step through them, and
-each sound pad plays its sound in the current bank.  Each bank also picks one
-of the device's five pad sets, recalled when the bank is selected, so the bank
-pads also step through the pad sets; the first five banks start on pad sets 1-5.  The files are copied into
+each sound pad plays its sound in the current bank.  Each bank also recalls one
+of the device's five pad sets when it is selected, so the bank pads also step
+through the pad sets:
+
+- banks 1-5 are the device's pad sets 1-5: their pads, functions and colours
+  live in the device;
+- banks 6 and up pick a pad set for their functions, and keep their own pad
+  colours here (``bank_colors``), written to the device's current pads when
+  the bank is selected.  The files are copied into
 ``data_dir()/sounds`` so a sound keeps working if the original file is moved.
 Settings live in ``config_dir()/sounds.json``::
 
@@ -15,7 +21,8 @@ Settings live in ``config_dir()/sounds.json``::
       "bank": 0,
       "bank_count": 3,
       "bank_names": {"0": "Memes"},
-      "bank_pad_sets": {"0": 0, "1": 1, "2": 0},
+      "bank_pad_sets": {"5": 0, "6": 2},
+      "bank_colors": {"5": {"1": [32, 0, 0]}},
       "channel": "System",
       "voice_apps": ["Discord"],
       "pad_backup": {"0:3": [4097, 2, 0]}
@@ -79,10 +86,10 @@ class SoundSettings:
     bank: int = 0  # current bank
     bank_count: int = DEVICE_PAD_SETS  # one bank per device pad set to start
     bank_names: dict[str, str] = field(default_factory=dict)  # "bank" -> name
-    # "bank" -> device pad set (0-4) recalled with the bank
-    bank_pad_sets: dict[str, int] = field(
-        default_factory=lambda: {str(i): i for i in range(DEVICE_PAD_SETS)}
-    )
+    # "bank" -> device pad set (0-4) recalled by banks 6 and up
+    bank_pad_sets: dict[str, int] = field(default_factory=dict)
+    # "bank" -> {"pad": [r, g, b] 0-32}: pad colours of banks 6 and up
+    bank_colors: dict[str, dict[str, list[int]]] = field(default_factory=dict)
     channel: str = "System"  # Bridge Cast channel the sounds play on
     voice_apps: list[str] = field(default_factory=lambda: ["Discord"])
     pad_backup: dict[str, list[int]] = field(default_factory=dict)
@@ -91,7 +98,19 @@ class SoundSettings:
         return self.bank_names.get(str(bank), "")
 
     def bank_pad_set(self, bank: int) -> int:
+        """Banks 1-5 are pad sets 1-5; later banks recall the pad set they picked."""
+        if is_device_bank(bank):
+            return bank
         return self.bank_pad_sets.get(str(bank), 0)
+
+    def pad_color(self, bank: int, pad: int) -> list[int] | None:
+        """The colour a bank 6+ gives *pad*, or None (the pad set's own)."""
+        return self.bank_colors.get(str(bank), {}).get(str(pad))
+
+
+def is_device_bank(bank: int) -> bool:
+    """Banks 1-5 (0-4) are the device's own pad sets."""
+    return 0 <= bank < DEVICE_PAD_SETS
 
 
 def _pad_sound(raw: object) -> PadSound | None:
@@ -134,13 +153,34 @@ def load() -> SoundSettings:
         settings.bank_pad_sets = {
             k: v
             for k, v in sets.items()
-            if k.isdigit() and isinstance(v, int) and 0 <= v < DEVICE_PAD_SETS
+            if k.isdigit()
+            and not is_device_bank(int(k))
+            and isinstance(v, int)
+            and 0 <= v < DEVICE_PAD_SETS
         }
+    colors = raw.get("bank_colors")
+    if isinstance(colors, dict):
+        for k, pads_colors in colors.items():
+            if not (k.isdigit() and isinstance(pads_colors, dict)):
+                continue
+            valid = {
+                pad: list(rgb)
+                for pad, rgb in pads_colors.items()
+                if isinstance(rgb, list)
+                and len(rgb) == 3
+                and all(isinstance(c, int) and 0 <= c <= 32 for c in rgb)
+            }
+            if valid:
+                settings.bank_colors[k] = valid
     count = raw.get("bank_count")
     used = max((_split_key(k)[0] + 1 for k in settings.pads), default=1)  # type: ignore[index]
-    # Banks that pick a pad set count too: the default gives one per pad set.
-    used = max(used, *(int(k) + 1 for k in settings.bank_pad_sets), 1)
-    settings.bank_count = max(count if isinstance(count, int) else 1, used, 1)
+    # Banks with a pad set or colours count too; banks 1-5 always exist.
+    used = max(
+        used,
+        DEVICE_PAD_SETS,
+        *(int(k) + 1 for k in [*settings.bank_pad_sets, *settings.bank_colors]),
+    )
+    settings.bank_count = max(count if isinstance(count, int) else 1, used)
     bank = raw.get("bank")
     settings.bank = bank if isinstance(bank, int) and 0 <= bank < settings.bank_count else 0
     if isinstance(raw.get("channel"), str):
@@ -203,7 +243,12 @@ def remove_file(file: str) -> None:
 
 
 def remove_bank(settings: SoundSettings, bank: int) -> None:
-    """Delete *bank*'s sounds and move the banks after it down by one."""
+    """Delete *bank* (6 or up) and its sounds; move the banks after it down by one.
+
+    Banks 1-5 are the device's pad sets and can't be deleted.
+    """
+    if is_device_bank(bank) or settings.bank_count <= DEVICE_PAD_SETS:
+        return
     pads: dict[str, PadSound] = {}
     for key, sound in settings.pads.items():
         b, pad = _split_key(key) or (0, 0)
@@ -223,6 +268,7 @@ def remove_bank(settings: SoundSettings, bank: int) -> None:
 
     settings.bank_names = shifted(settings.bank_names)
     settings.bank_pad_sets = shifted(settings.bank_pad_sets)
+    settings.bank_colors = shifted(settings.bank_colors)
     settings.bank_count = max(1, settings.bank_count - 1)
     settings.bank = min(settings.bank, settings.bank_count - 1)
 

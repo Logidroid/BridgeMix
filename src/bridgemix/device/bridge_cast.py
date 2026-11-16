@@ -801,6 +801,30 @@ class BridgeCast(QObject):
             QTimer.singleShot(150 + i * 5, lambda f=frame: self._send_raw(f))
         return True
 
+    def set_pad_color(
+        self,
+        number: int,
+        color: tuple[int, int, int],
+        *,
+        memory_sets: list[int],
+        current: bool,
+    ) -> bool:
+        """Set pad *number*'s light (0-32 per channel) in the memory of
+        *memory_sets* and, if *current*, in the current pads."""
+        if not self._is_connected or not self.is_bridge_cast_x:
+            return False
+        type_, base = pads.pad_location(number)
+        blocks = [(pads.SECTION_PAD_SET_MEMORY, pads.memory_type(ps, number)) for ps in memory_sets]
+        if current:
+            blocks.insert(0, (C.SECTION_CHANNEL, type_))
+        for section, block in blocks:
+            for i, value in enumerate(color):
+                self._write_word(section, block, base + pads.OFF_COLOR + 2 * i, value)
+        for i, (section, block) in enumerate(blocks):  # read them back
+            frame = build_read(section, block, base, 0x00, pads.PAD_SIZE)
+            QTimer.singleShot(150 + i * 5, lambda f=frame: self._send_raw(f))
+        return True
+
     def recall_pad_set(self, pad_set: int) -> None:
         """Switch the device to *pad_set* (0-4); it loads that set's pads."""
         if not self._is_connected or not self.is_bridge_cast_x:

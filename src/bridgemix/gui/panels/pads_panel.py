@@ -18,6 +18,7 @@ from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -189,6 +190,10 @@ class PadsPanel(QWidget):
         bridge.control_change.connect(self._on_control_change)
         bridge.device_info_updated.connect(lambda *_: self._update_model())
         bridge.connected.connect(lambda _c: self._update_model())
+        # Once the device is read, put it on the saved bank's pad set and colours.
+        bridge.connected.connect(
+            lambda c: c and QTimer.singleShot(2500, lambda: self._go_to_bank(store.load().bank))
+        )
         self._update_model()
         self._select(1)
 
@@ -302,12 +307,12 @@ class PadsPanel(QWidget):
                 "Click a pad to set it up. Choose a file and the pad plays it in the "
                 "current bank: BridgeMix keeps a copy (WAV, FLAC, OGG or MP3). Set two "
                 "pads to the previous and next bank to change banks from the device; "
-                "they are set in all five pad sets. There is no limit on banks, and "
-                "each bank recalls a device pad set (banks 1-5 start on pad sets 1-5), "
-                "so the pads' device functions (SFX, hot keys, Reverb…) follow the "
-                "bank. The pad's previous function is kept, so Remove or the "
-                "function list gives it back. A pad lights up here when you press it "
-                "on the device."
+                "they are set in all five pad sets. There is no limit on banks. Banks "
+                "1-5 are the device's pad sets 1-5: their functions and colours are "
+                "saved in the device. Banks 6 and up use the functions of the pad set "
+                "you pick and keep their own colours in BridgeMix. The pad's previous "
+                "function is kept, so Remove or the function list gives it back. A pad "
+                "lights up here when you press it on the device."
             )
         )
         self._update_pad_set_label()
@@ -320,26 +325,45 @@ class PadsPanel(QWidget):
         settings = store.load()
         self._bank_lbl.setText(f"Bank {settings.bank + 1} / {settings.bank_count}")
         self._bank_name.setText(settings.bank_name(settings.bank))
-        self._remove_bank_btn.setEnabled(settings.bank_count > 1)
+        device_bank = store.is_device_bank(settings.bank)
+        self._remove_bank_btn.setEnabled(not device_bank)
+        self._remove_bank_btn.setToolTip(
+            "Banks 1-5 are the device's pad sets and can't be deleted"
+            if device_bank
+            else "Delete this bank and its sounds"
+        )
         self._bank_pad_set.blockSignals(True)
         self._bank_pad_set.setCurrentIndex(settings.bank_pad_set(settings.bank))
+        self._bank_pad_set.setEnabled(not device_bank)
+        self._bank_pad_set.setToolTip(
+            f"Bank {settings.bank + 1} is pad set {settings.bank + 1} of the device"
+            if device_bank
+            else "The device pad set this bank recalls: its pad functions"
+        )
         self._bank_pad_set.blockSignals(False)
 
     def _bank_changed(self) -> None:
         self._show_bank()
         self._show_sound()
+        self._show_color()
         for number in self._tiles:
             self._refresh_tile(number)
 
     def _go_to_bank(self, bank: int) -> None:
-        """Select *bank* and recall its pad set on the device if needed."""
+        """Select *bank*: recall its pad set on the device (this also brings back
+        the pad set's own colours), then apply the bank's colours if it has some."""
         settings = store.load()
         settings.bank = bank % settings.bank_count
         store.save(settings)
-        pad_set = settings.bank_pad_set(settings.bank)
-        if pad_set != self._pad_set():
-            self._bridge.recall_pad_set(pad_set)
+        self._bridge.recall_pad_set(settings.bank_pad_set(settings.bank))
+        if settings.bank_colors.get(str(settings.bank)):
+            QTimer.singleShot(150, self._apply_bank_colors)  # after the device loaded the set
         self._bank_changed()
+
+    def _apply_bank_colors(self) -> None:
+        settings = store.load()
+        for pad, rgb in settings.bank_colors.get(str(settings.bank), {}).items():
+            self._bridge.set_pad_color(int(pad), tuple(rgb), memory_sets=[], current=True)
 
     def _step_bank(self, step: int) -> None:
         self._go_to_bank(store.load().bank + step)
@@ -359,7 +383,7 @@ class PadsPanel(QWidget):
 
     def _remove_bank(self) -> None:
         settings = store.load()
-        if settings.bank_count <= 1:
+        if store.is_device_bank(settings.bank):
             return
         name = settings.bank_name(settings.bank) or f"Bank {settings.bank + 1}"
         answer = QMessageBox.question(
@@ -432,7 +456,75 @@ class PadsPanel(QWidget):
         self._press_again.setToolTip("Off: pressing the pad again restarts the sound")
         self._press_again.toggled.connect(self._set_press_again)
         form.addRow("", self._press_again)
+
+        color_row = QHBoxLayout()
+        self._color_btn = QPushButton()
+        self._color_btn.setFixedSize(48, 26)
+        self._color_btn.setToolTip("Change the pad's light colour")
+        self._color_btn.clicked.connect(self._choose_color)
+        color_row.addWidget(self._color_btn)
+        self._color_reset = QPushButton("Use the pad set's colour")
+        self._color_reset.clicked.connect(self._reset_color)
+        color_row.addWidget(self._color_reset)
+        self._color_where = QLabel()
+        self._color_where.setStyleSheet(_HINT_STYLE)
+        color_row.addWidget(self._color_where, stretch=1)
+        form.addRow("Colour:", color_row)
         return self._editor
+
+    # ── the selected pad's colour ─────────────────────────────────────────────
+
+    def _show_color(self) -> None:
+        settings = store.load()
+        pad = self._bridge.control_pads.get(self._selected)
+        color = _pad_color(pad)
+        self._color_btn.setStyleSheet(
+            f"background-color: {color.name()}; border: 1px solid {theme.SURFACE_5};"
+        )
+        self._color_btn.setEnabled(pad is not None)
+        custom = settings.pad_color(settings.bank, self._selected) is not None
+        device_bank = store.is_device_bank(settings.bank)
+        self._color_reset.setVisible(not device_bank)
+        self._color_reset.setEnabled(custom)
+        if device_bank:
+            self._color_where.setText(f"Saved in the device (pad set {settings.bank + 1})")
+        else:
+            self._color_where.setText("Saved in BridgeMix for this bank")
+
+    def _choose_color(self) -> None:
+        pad = self._bridge.control_pads.get(self._selected)
+        if pad is None:
+            return
+        picked = QColorDialog.getColor(_pad_color(pad), self, f"Colour of pad {self._selected}")
+        if not picked.isValid():
+            return
+        rgb = tuple(round(c * 32 / 255) for c in (picked.red(), picked.green(), picked.blue()))
+        settings = store.load()
+        if store.is_device_bank(settings.bank):
+            # Banks 1-5: the device's pad set keeps the colour.
+            ok = self._bridge.set_pad_color(
+                self._selected, rgb, memory_sets=[settings.bank], current=True
+            )
+        else:
+            settings.bank_colors.setdefault(str(settings.bank), {})[str(self._selected)] = list(rgb)
+            store.save(settings)
+            ok = self._bridge.set_pad_color(self._selected, rgb, memory_sets=[], current=True)
+        if not ok:
+            QMessageBox.warning(self, "Colour not changed", "Is the BRIDGE CAST X connected?")
+
+    def _reset_color(self) -> None:
+        """Bank 6+: drop the bank's colour and show the pad set's own again."""
+        settings = store.load()
+        colors = settings.bank_colors.get(str(settings.bank), {})
+        if colors.pop(str(self._selected), None) is None:
+            return
+        if not colors:
+            settings.bank_colors.pop(str(settings.bank), None)
+        store.save(settings)
+        stored = self._bridge.pad_memory.get((settings.bank_pad_set(settings.bank), self._selected))
+        if stored is not None:
+            self._bridge.set_pad_color(self._selected, stored.color, memory_sets=[], current=True)
+        self._show_color()
 
     def _select(self, number: int) -> None:
         self._selected = number
@@ -441,6 +533,7 @@ class PadsPanel(QWidget):
         self._editor.setTitle(f"PAD {number}")
         self._show_function()
         self._show_sound()
+        self._show_color()
 
     def _show_sound(self) -> None:
         sound = store.load().pads.get(self._key(self._selected))
@@ -521,6 +614,7 @@ class PadsPanel(QWidget):
         if pad.number == self._selected:
             self._show_function()
             self._show_sound()
+            self._show_color()
 
     def _refresh_tile(self, number: int) -> None:
         pad = self._bridge.control_pads.get(number)
