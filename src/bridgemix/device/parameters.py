@@ -687,6 +687,21 @@ def _build_registry() -> dict[str, Parameter]:
     add(_p("voice_pitch", SC, VOI, C.ADDR_VOICE_PITCH, C.VOICE_MIN, C.VOICE_MAX, C.VOICE_DEFAULT))
     add(_p("voice_format", SC, VOI, C.ADDR_VOICE_FORMAT, C.VOICE_MIN, C.VOICE_MAX, C.VOICE_DEFAULT))
     add(_p("voice_mode", SC, VOI, C.ADDR_VOICE_MODE, 0, 1, 0))
+    add(_p("vt_switch", SC, VOI, C.ADDR_VT_SWITCH, 0, 1, 0))
+    add(_p("vt_robot_switch", SC, VOI, C.ADDR_VT_ROBOT_SWITCH, 0, 1, 0))
+    add(_p("vt_megaphone_switch", SC, VOI, C.ADDR_VT_MEGAPHONE_SWITCH, 0, 1, 0))
+    add(_p("vt_robot_variation", SC, VOI, C.ADDR_VT_ROBOT_VARIATION, 0, C.VT_VARIATION_MAX, 0))
+    add(
+        _p(
+            "vt_megaphone_variation",
+            SC,
+            VOI,
+            C.ADDR_VT_MEGAPHONE_VARIATION,
+            0,
+            C.VT_VARIATION_MAX,
+            0,
+        )
+    )
     add(_p("reverb_switch", SC, VOI, C.ADDR_REVERB_SWITCH, 0, 1, 0))
     add(_p("reverb_size", SC, VOI, C.ADDR_REVERB_SIZE, C.REVERB_SIZE_MIN, C.REVERB_SIZE_MAX, 0))
     add(_p("reverb_level", SC, VOI, C.ADDR_REVERB_LEVEL, C.REVERB_LEVEL_MIN, C.REVERB_LEVEL_MAX, 0))
