@@ -23,7 +23,8 @@
 
 This is a fork of [Ex0danify/BridgeMix](https://github.com/Ex0danify/BridgeMix) focused on
 the **Roland BRIDGE CAST X**. It is tested on a BRIDGE CAST X with firmware 1.02 (build 67)
-on Linux. The rest of this README is the original project's.
+on Linux. The rest of this README comes from the original project; its links point to this
+fork.
 
 Changes from the original project:
 
@@ -32,6 +33,41 @@ Changes from the original project:
 | **BRIDGE CAST X knobs** | The four knobs are freely assignable, as in Roland's app. BridgeMix now writes the X's own knob registers (`7F 03 08 60`–`66`) instead of the base model's, so changing a knob source takes effect on the device. INPUTS shows the X layout (MIC, CHAT, HDMI, GAME) and offers HDMI as a source on every knob. |
 | **BRIDGE CAST X meters** | The X reports a single level for the CHAT, GAME and MUSIC inputs. It is now shown on both bars instead of leaving the right bar at zero. |
 | **App Audio Routing** | The channel list is refreshed while the panel is open. It follows the device's audio outputs when they appear or change (device plugged in, card profile switched) instead of keeping the list read at startup. |
+| **Linux audio profile for the X** | An ALSA UCM profile and its install script, so the X shows up with its own channels (see below). |
+| **Updates** | The in-app update check and the self-updater follow this fork's releases. |
+
+### Download
+
+Get the packages from this fork's [Releases](https://github.com/Logidroid/BridgeMix/releases/latest):
+a Flatpak for Linux, a Windows installer and portable zip, and a macOS `.dmg`. They use the
+same app id as the original BridgeMix, so installing one replaces an installed original
+BridgeMix and keeps its settings.
+
+### BRIDGE CAST X on Linux: separate channels
+
+Linux doesn't know the X's channel layout. Without help, PipeWire shows a single
+"Analog Surround 7.1" output and one 6-channel input, so App Audio Routing has nothing to
+route to and voice chat apps record the STREAM mix. The X (USB ID `0582:02e8`) needs the
+profile in [`packaging/linux`](packaging/linux). The X V2 (`0582:0321`) is already supported by
+alsa-ucm-conf and doesn't need it.
+
+It needs **alsa-ucm-conf 1.2.16 or later**. From a clone of this repository (or the source
+archive of a release):
+
+```bash
+packaging/linux/install-ucm.sh              # asks for your password (sudo)
+packaging/linux/install-ucm.sh --uninstall  # to remove it
+```
+
+The script copies three files to `/usr/share/alsa/ucm2/USB-Audio/conf.d/` and restarts
+WirePlumber. The X then appears as:
+
+| Outputs (playback) | Inputs (recording) |
+|---|---|
+| Chat, Game, Music, System | Stream, Personal, Mic |
+
+In Discord or any other voice chat app, choose the **Mic** input and the **Chat** output.
+The Flatpak can't install this profile itself; run the script once on the host.
 
 ---
 > **Notice on AI:** Parts of this project were developed with AI assistance. 
@@ -108,7 +144,7 @@ This software was developed on an original Roland Bridge Cast. The compatibility
 - **Python 3.11+**, or conda
 
 ```bash
-git clone https://github.com/Ex0danify/BridgeMix.git
+git clone https://github.com/Logidroid/BridgeMix.git
 cd BridgeMix
 ./setup.sh       # Linux / macOS
 setup.bat        # Windows

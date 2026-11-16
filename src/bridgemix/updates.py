@@ -22,7 +22,7 @@ from bridgemix import __version__
 
 log = logging.getLogger(__name__)
 
-_REPO = "Ex0danify/BridgeMix"
+_REPO = "Logidroid/BridgeMix"  # this fork's releases (BRIDGE CAST X support)
 _RELEASES_API = f"https://api.github.com/repos/{_REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{_REPO}/releases/latest"
 

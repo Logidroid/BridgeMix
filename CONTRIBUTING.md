@@ -14,7 +14,7 @@ protocol findings are all welcome.
 The project uses a `src/` layout and targets **Python 3.11+**.
 
 ```bash
-git clone https://github.com/Ex0danify/BridgeMix.git
+git clone https://github.com/Logidroid/BridgeMix.git
 cd BridgeMix
 pip install -e ".[dev]"     # installs runtime + dev deps (pytest, ruff)
 ```

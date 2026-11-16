@@ -110,6 +110,9 @@ class AboutDialog(QDialog):
             "href='https://github.com/Ex0danify/BridgeMix'>Ex0danify</a>"
             "&nbsp;&nbsp;·&nbsp;&nbsp;"
             "<a style='color:#e05c12;text-decoration:none;' "
+            "href='https://github.com/Logidroid/BridgeMix'>BRIDGE CAST X fork</a>"
+            "&nbsp;&nbsp;·&nbsp;&nbsp;"
+            "<a style='color:#e05c12;text-decoration:none;' "
             "href='https://www.gnu.org/licenses/gpl-3.0.html'>License (GPL-3.0)</a>"
         )
         links.setTextFormat(Qt.TextFormat.RichText)
