@@ -77,6 +77,13 @@ _X_SYNC_FRAMES = [
     (C.SECTION_CHANNEL, C.TYPE_STRIP_CONFIG, 0x40, 0x00, C.SYNC_RQ1_LED_SIZE),
 ]
 
+# The BRIDGE CAST X reports a single level word for these USB inputs: the
+# first word of the 4-byte slot moves, the second stays 0 even with stereo
+# content (seen on FW 1.02 build 67).  The word follows whichever side is
+# louder, so it is a level for both sides, not the left one; no other polled
+# block (7F 01 10/11) carries a right word.  It is shown on both bars.
+_X_SINGLE_LEVEL_METERS = ("st_chat", "st_game", "st_music", "ps_chat", "ps_game", "ps_music")
+
 
 class BridgeCast(QObject):
     # Public signals
@@ -996,6 +1003,10 @@ class BridgeCast(QObject):
             # FW 1.06 — full 4-byte stereo slot at wire index 127.
             "out_line": (self._cached_line if len(raw) < 135 else slot(C.METER_IDX_OUT_LINE)),
         }
+        if self.is_bridge_cast_x:
+            for key in _X_SINGLE_LEVEL_METERS:
+                level = meters[key][0]
+                meters[key] = (level, level)
         self.meter_updated.emit(meters)
 
         # Game EQ spectrum analyzer status: mido[35] (wire byte 36) reads 0x01
