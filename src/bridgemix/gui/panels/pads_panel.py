@@ -698,25 +698,29 @@ class PadsPanel(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, f"Sound for pad {number}", str(Path.home()), _FILE_FILTER
         )
-        if not path:
-            return
+        if path:
+            self.assign_file(number, Path(path))
+
+    def assign_file(self, number: int, path: Path) -> bool:
+        """Put *path* (a copy) on pad *number* in the current bank and make the
+        pad a sound pad.  Used by Choose… and by the Tuna page."""
         key = self._key(number)
         try:
-            copy = store.import_file(key, Path(path))
+            copy = store.import_file(key, path)
         except OSError as exc:
             QMessageBox.critical(self, "Sound not added", f"Could not copy the file:\n{exc}")
-            return
+            return False
         settings = store.load()
         sound = settings.pads.setdefault(key, store.PadSound())
         previous, sound.file = sound.file, str(copy)
         store.save(settings)
         if previous != sound.file:
             store.remove_file(previous)
-        self._show_sound()
+        self._select(number)
         self._refresh_tile(number)
         pad = self._bridge.control_pads.get(number)
         if pad is not None and pad.is_sound_pad(self._pad_set()):
-            return
+            return True
         if not self._assign(number, "sound"):
             QMessageBox.warning(
                 self,
@@ -724,6 +728,19 @@ class PadsPanel(QWidget):
                 "The sound is saved, but the pad could not be changed: is the "
                 "BRIDGE CAST X connected?",
             )
+            return False
+        return True
+
+    def bank_label(self) -> str:
+        """'Bank 6 (Memes)' for the current bank."""
+        settings = store.load()
+        name = settings.bank_name(settings.bank)
+        return f"Bank {settings.bank + 1}" + (f" ({name})" if name else "")
+
+    def pad_label(self, number: int) -> str:
+        """What pad *number* does now, as shown on its tile."""
+        tile = self._tiles.get(number)
+        return tile.detail if tile is not None and tile.detail else "Not read yet"
 
     def _clear(self) -> None:
         number = self._selected

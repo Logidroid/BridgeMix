@@ -119,6 +119,15 @@ class SoundPlayer:
         """Play the sound of pad *key*; *voice_chat* False plays it only here (preview)."""
         threading.Thread(target=self._play, args=(key, voice_chat), daemon=True).start()
 
+    PREVIEW_KEY = "preview"
+
+    def preview_file(self, path: Path, volume: int = 80) -> None:
+        """Play any sound file here only (not to voice chat), e.g. before it is
+        put on a pad.  stop(PREVIEW_KEY) stops it."""
+        threading.Thread(
+            target=self._start, args=(self.PREVIEW_KEY, str(path), volume, False), daemon=True
+        ).start()
+
     def is_playing(self, key: str) -> bool:
         with self._lock:
             proc = self._procs.get(key)
@@ -137,22 +146,25 @@ class SoundPlayer:
     # ── worker thread ─────────────────────────────────────────────────────────
 
     def _play(self, key: str, voice_chat: bool) -> None:
-        settings = store.load()
-        sound = settings.pads.get(key)
+        sound = store.load().pads.get(key)
         if sound is None or not Path(sound.file).is_file():
             log.info("No sound file for pad %s", key)
             return
+        self._start(key, sound.file, sound.volume, voice_chat)
+
+    def _start(self, key: str, file: str, volume: int, voice_chat: bool) -> None:
+        settings = store.load()
         self.stop(key)  # pressing again restarts the sound
 
         name = f"{NODE_PREFIX}-{key.replace(':', '-')}-{next(self._counter)}"
         props = f'{{ node.name = "{name}" media.name = "BridgeMix pad sound" }}'
-        cmd = ["pw-play", "--volume", f"{sound.volume / 100:.2f}", "-P", props]
+        cmd = ["pw-play", "--volume", f"{volume / 100:.2f}", "-P", props]
         target = backend.resolve_target(settings.channel, backend.list_targets())
         if target is not None:
             cmd += ["--target", target.sink_name]
         try:
             proc = subprocess.Popen(
-                [*cmd, sound.file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                [*cmd, file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
         except OSError as exc:
             log.warning("Could not play the sound of pad %s: %s", key, exc)

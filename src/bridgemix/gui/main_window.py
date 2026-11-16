@@ -87,6 +87,7 @@ from bridgemix.gui.panels.pads_panel import PadsPanel
 from bridgemix.gui.panels.plugins import PluginsPanel
 from bridgemix.gui.panels.routing_panel import RoutingPanel
 from bridgemix.gui.panels.system_panel import SystemPanel
+from bridgemix.gui.panels.tuna_panel import TunaPanel
 from bridgemix.gui.widgets.preset_bar import PresetBar
 from bridgemix.midi.detector import find_device
 from bridgemix.plugins.device import DeviceFacade
@@ -352,6 +353,7 @@ class MainWindow(QMainWindow):
             ("GAME FX", 4),
             ("CHAT FX", 5),
             ("PADS", 10),
+            ("TUNA", 11),
             ("OUTPUT", 6),
             ("SYSTEM", 7),
             ("PLUGINS", 8),
@@ -393,7 +395,9 @@ class MainWindow(QMainWindow):
         self._sound_player = sound_player.SoundPlayer() if sound_player.available() else None
         if self._sound_player is not None:
             b.control_change.connect(self._sound_player.handle_control_change)
-        self._stack.addWidget(PadsPanel(b, self._sound_player))  # 10 — sound pads
+        pads_panel = PadsPanel(b, self._sound_player)
+        self._stack.addWidget(pads_panel)  # 10 — sound pads
+        self._stack.addWidget(TunaPanel(pads_panel, self._sound_player))  # 11 — Voicemod Tuna
 
         self._overlay = _DisconnectOverlay(self._stack)
         self._overlay.resize(self._stack.size())

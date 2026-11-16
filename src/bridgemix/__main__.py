@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QCoreApplication, Qt, QTimer
 from PyQt6.QtWidgets import QApplication
 
 from bridgemix import __version__
@@ -45,6 +45,8 @@ def main() -> None:
     parser.add_argument("--smoke-report", type=Path, help="write the --smoke-test result to a file")
     args, qt_args = parser.parse_known_args()
 
+    # Qt WebEngine (the optional Tuna page) needs this before the QApplication.
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication([sys.argv[0], *qt_args])
     app.setApplicationName("BridgeMix")
     app.setOrganizationName("Ex0danify")
