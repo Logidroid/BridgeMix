@@ -22,26 +22,27 @@
 ## About this fork
 
 This is a fork of [Ex0danify/BridgeMix](https://github.com/Ex0danify/BridgeMix) focused on
-the **Roland BRIDGE CAST X**. It is tested on a BRIDGE CAST X with firmware 1.02 (build 67)
-on Linux. The rest of this README comes from the original project; its links point to this
-fork.
+the **Roland BRIDGE CAST X**. It is tested on Linux with one BRIDGE CAST X, first on firmware
+1.02 (build 67), then on firmware 3.00. The rest of this README comes from the original
+project; its links point to this fork.
 
-> **Why firmware 1.02?** Roland updates the X's firmware only from its Windows and macOS app.
-> The [firmware download page](https://www.roland.com/global/support/by_product/bridge_cast_x/updates_drivers/ee518cda-d94c-447b-b2ff-bfb6c6192d93/)
-> has nothing to download: it tells you to install the app. The app's own changelog for
-> version 4.01 then says: *"Fixed an issue that prevented connection to BRIDGE CAST X
-> Ver. 1.02."* My Windows 11 PC never got through that update, so this X stays on 1.02,
-> and this fork makes it work on Linux instead. No driver to install, no "Version mismatch"
-> pop-up.
+> **A firmware update story.** Roland updates the X's firmware only from its Windows and
+> macOS app. The [firmware download page](https://www.roland.com/global/support/by_product/bridge_cast_x/updates_drivers/ee518cda-d94c-447b-b2ff-bfb6c6192d93/)
+> has nothing to download: it tells you to install the app. The app's changelog for version
+> 4.01 says: *"Fixed an issue that prevented connection to BRIDGE CAST X Ver. 1.02."* This X
+> stayed on 1.02 for a while, because Windows 11 and the app never agreed on an update. When
+> the update to 3.00 finally went through (on the USB II port, as Roland requires), the X came
+> back with a new name, a new USB ID and every fader at 100. Linux recognised it straight
+> away, with no driver. This fork supports both firmwares.
 
 Changes from the original project:
 
 | Area | Change |
 |---|---|
 | **BRIDGE CAST X knobs** | The four knobs are freely assignable, as in Roland's app. BridgeMix now writes the X's own knob registers (`7F 03 08 60`–`66`) instead of the base model's, so changing a knob source takes effect on the device. INPUTS shows the X layout (MIC, CHAT, HDMI, GAME) and offers HDMI as a source on every knob. |
-| **BRIDGE CAST X meters** | The X reports a single level for the CHAT, GAME and MUSIC inputs. It is now shown on both bars instead of leaving the right bar at zero. |
-| **App Audio Routing** | The channel list is refreshed while the panel is open. It follows the device's audio outputs when they appear or change (device plugged in, card profile switched) instead of keeping the list read at startup. |
-| **Linux audio profile for the X** | An ALSA UCM profile and its install script, so the X shows up with its own channels (see below). |
+| **BRIDGE CAST X meters** | Some X inputs report a single level instead of left and right: CHAT, GAME and MUSIC on firmware 1.02, only GAME on 3.00. BridgeMix shows that level on both bars, and real left and right as soon as the device sends them. |
+| **App Audio Routing** | The channel list follows the device's audio outputs while the panel is open. Rules are saved by channel (Chat, Music…), so they keep working when the device appears under another name (other USB port, firmware update), and a rule whose channel is missing no longer logs an error every 1.5 s. |
+| **Linux audio profiles for the X** | ALSA UCM profiles and their install script: one for the X on firmware 1.0x, and a copy of a not-yet-released alsa-ucm-conf fix for the X V2 (see below). |
 | **Updates** | The in-app update check and the self-updater follow this fork's releases. |
 
 ### Download
@@ -53,29 +54,32 @@ BridgeMix and keeps its settings.
 
 ### BRIDGE CAST X on Linux: separate channels
 
-Linux doesn't know the X's channel layout. Without help, PipeWire shows a single
-"Analog Surround 7.1" output and one 6-channel input, so App Audio Routing has nothing to
-route to and voice chat apps record the STREAM mix. The X (USB ID `0582:02e8`) needs the
-profile in [`packaging/linux`](packaging/linux). The X V2 (`0582:0321`) is already supported by
-alsa-ucm-conf and doesn't need it.
+What the X needs depends on its firmware. `lsusb | grep Roland` shows its USB ID:
 
-It needs **alsa-ucm-conf 1.2.16 or later**. From a clone of this repository (or the source
-archive of a release):
+| X firmware | USB ID | Without the script |
+|---|---|---|
+| 1.0x | `0582:02e8` | alsa-ucm-conf has no profile. PipeWire shows one "Analog Surround 7.1" output and one 6-channel input, so App Audio Routing has nothing to route to and voice chat apps record the STREAM mix. |
+| Recent (3.00 tested), shown as "X V2" | `0582:0321` on USB II, `0582:0320` on USB I | alsa-ucm-conf 1.2.16.1 handles USB II but declares 16 playback channels (the X has 14), so every device name shows "[ALSA UCM error]". It doesn't know USB I. Both are fixed upstream ([commit 7ea2531c](https://github.com/alsa-project/alsa-ucm-conf/commit/7ea2531c)), but no release includes the fix yet. |
+
+The script needs **alsa-ucm-conf 1.2.16 or later**. From a clone of this repository (or the
+source archive of a release):
 
 ```bash
 packaging/linux/install-ucm.sh              # asks for your password (sudo)
 packaging/linux/install-ucm.sh --uninstall  # to remove it
 ```
 
-The script copies three files to `/usr/share/alsa/ucm2/USB-Audio/conf.d/` and restarts
-WirePlumber. The X then appears as:
+It copies the profiles to `/usr/share/alsa/ucm2/USB-Audio/conf.d/` and restarts WirePlumber.
+The X then appears as:
 
-| Outputs (playback) | Inputs (recording) |
-|---|---|
-| Chat, Game, Music, System | Stream, Personal, Mic |
+| X firmware | Outputs (playback) | Inputs (recording) |
+|---|---|---|
+| 1.0x | Chat, Game, Music, System | Stream, Personal, Mic |
+| Recent | Chat, Game, Music, System | Stream Mix, Mic, Sub Mix |
 
 In Discord or any other voice chat app, choose the **Mic** input and the **Chat** output.
-The Flatpak can't install this profile itself; run the script once on the host.
+The Flatpak can't install these profiles itself; run the script once on the host. The USB I
+port of the X V2 (`0582:0320`) hasn't been tested here.
 
 ---
 > **Notice on AI:** Parts of this project were developed with AI assistance. 
@@ -149,10 +153,9 @@ a BRIDGE CAST X. The BRIDGE CAST ONE is not tested.
 
 **Requirements:**
 
-- A **Roland BRIDGE CAST** (original, V2) on **FW 3.00 (115)**, or a **BRIDGE CAST X**
-  (USB ID `0582:02e8`) on **FW 1.02 (67)**, the firmware this fork is tested on. Newer X
-  firmware is not tested.
-- On Linux with a BRIDGE CAST X: the audio profile described in
+- A **Roland BRIDGE CAST** (original, V2) on **FW 3.00 (115)**, or a **BRIDGE CAST X** on
+  **FW 1.02 (67)** or **FW 3.00**, the firmwares this fork is tested on
+- On Linux with a BRIDGE CAST X: the audio profiles described in
   [BRIDGE CAST X on Linux](#bridge-cast-x-on-linux-separate-channels)
 - **Python 3.11+**, or conda
 
