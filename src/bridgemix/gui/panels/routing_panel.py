@@ -221,6 +221,11 @@ class _StreamRow(QWidget):
         if stream.sink_name != self._combo_sink:
             self._populate_combo()  # only rebuild when the routed sink changed
 
+    def set_targets(self, targets: list[Target]) -> None:
+        """Use a new channel list (sinks appeared or went away) and rebuild the dropdown."""
+        self._targets = targets
+        self._populate_combo()
+
     def _refresh_appearance(self) -> None:
         self._icon.setPixmap(_app_icon(self._stream).pixmap(QSize(_ICON_SIZE, _ICON_SIZE)))
         self._name.setText(self._stream.label)
@@ -401,8 +406,6 @@ class RoutingPanel(QWidget):
 
         self._anim.stop()
         if expanded:
-            if not self._targets:
-                self._targets = backend.list_targets()  # device may have appeared
             self._body.setVisible(True)
             self._on_streams(backend.list_streams())  # build rows before sliding in
             self._anim.setStartValue(self._body.maximumWidth())
@@ -522,14 +525,30 @@ class RoutingPanel(QWidget):
                 result.append((key, group))
         return result
 
+    def _refresh_targets(self) -> None:
+        """Re-read the Bridge Cast channels.
+
+        The sinks change while the app runs: the device is plugged in or out, or
+        its card profile is switched (each profile creates different sinks).  A
+        list read only at startup would offer sinks that no longer exist.
+        """
+        targets = backend.list_targets()
+        if targets == self._targets:
+            return
+        self._targets = targets
+        for row in self._rows.values():
+            row.set_targets(targets)
+
     def _on_streams(self, streams: list) -> None:
         if not self._expanded:
             return  # don't churn the UI while collapsed; rebuilt when reopened
-        if not self._targets:
-            self._targets = backend.list_targets()
+        self._refresh_targets()
 
         grouped = self._grouped(streams)
-        sig = tuple((key, tuple(s.index for s in group)) for key, group in grouped)
+        sig = (
+            tuple(self._targets),  # channel names feed the group headers
+            tuple((key, tuple(s.index for s in group)) for key, group in grouped),
+        )
         if sig == self._render_sig:
             for _key, group in grouped:  # layout unchanged → update in place
                 for s in group:
