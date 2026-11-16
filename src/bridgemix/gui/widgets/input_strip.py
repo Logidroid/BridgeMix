@@ -732,6 +732,22 @@ class InputStrip(QFrame):
 
     # ── Channel reassignment ──────────────────────────────────────────────────
 
+    def set_channel_choices(self, channels: list[str]) -> None:
+        """Replace the sources offered by the assignment combo (hardware strips only).
+
+        Call ``rebind`` afterwards if the current channel is not in *channels*.
+        """
+        self._all_channels = list(channels)
+        if self._combo is None:
+            return
+        self._combo.blockSignals(True)
+        self._combo.clear()
+        for ch in self._all_channels:
+            self._combo.addItem(_CH_DISPLAY.get(ch, ch.upper()), ch)
+        if self._ch_key in self._all_channels:
+            self._combo.setCurrentIndex(self._all_channels.index(self._ch_key))
+        self._combo.blockSignals(False)
+
     def rebind(
         self,
         ch_key: str,

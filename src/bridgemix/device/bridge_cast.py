@@ -17,7 +17,12 @@ import time
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 
 from bridgemix.device import constants as C
-from bridgemix.device.parameters import REGISTRY, lookup_by_address
+from bridgemix.device.parameters import (
+    HW_STRIP_PARAMS,
+    REGISTRY,
+    X_STRIP_PARAMS,
+    lookup_by_address,
+)
 from bridgemix.midi.sysex import (
     build_heartbeat_rq1,
     build_identity_request,
@@ -66,6 +71,12 @@ _SYNC_FRAMES = [
     (C.SECTION_CHANNEL, C.TYPE_HOTKEY, 0x00, 0x00, C.SYNC_RQ1_HOTKEY_SIZE),
 ]
 
+# Extra bulk reads for the BRIDGE CAST X only: the second half of the
+# strip-config block carries its four knob assignments at 0x60-0x67.
+_X_SYNC_FRAMES = [
+    (C.SECTION_CHANNEL, C.TYPE_STRIP_CONFIG, 0x40, 0x00, C.SYNC_RQ1_LED_SIZE),
+]
+
 
 class BridgeCast(QObject):
     # Public signals
@@ -92,6 +103,9 @@ class BridgeCast(QObject):
         self._is_connected = False
         self._last_rx: float = 0.0
         self._device_info: tuple[str, str] | None = None  # (model, firmware) dedup
+        # Firmware-echo model code (0x01 = BRIDGE CAST X). Decides which address
+        # block the four physical knobs are read from and written to.
+        self._model_code: int | None = None
         self._voice_preset_names: list[str] = [f"Preset {i + 1}" for i in range(5)]
         self._profile_names: list[str] = [f"Profile {i + 1}" for i in range(5)]
         self._game_eq_preset_names: list[str] = [f"Game EQ {i + 1}" for i in range(5)]
@@ -213,12 +227,13 @@ class BridgeCast(QObject):
         if not self._is_connected:
             return
         self.status_message.emit("Connected — syncing device state…")
-        for i, (sec, type_, hi, lo, size) in enumerate(_SYNC_FRAMES):
+        frames = _SYNC_FRAMES + (_X_SYNC_FRAMES if self.is_bridge_cast_x else [])
+        for i, (sec, type_, hi, lo, size) in enumerate(frames):
             frame = build_read(sec, type_, hi, lo, size)
             QTimer.singleShot(i * 5, lambda f=frame: self._send_raw(f))
-        log.debug("Sync: queued %d bulk RQ1 reads", len(_SYNC_FRAMES))
+        log.debug("Sync: queued %d bulk RQ1 reads", len(frames))
         # Stagger name reads after the main sync burst finishes
-        burst_ms = len(_SYNC_FRAMES) * 5 + 100
+        burst_ms = len(frames) * 5 + 100
         QTimer.singleShot(burst_ms, self._sync_voice_preset_names)
         QTimer.singleShot(burst_ms + 50, self._sync_profile_names)
         QTimer.singleShot(burst_ms + 100, self._sync_game_eq_preset_names)
@@ -334,13 +349,21 @@ class BridgeCast(QObject):
         """Send a raw SysEx mido tuple (for MIDI monitor raw sender)."""
         self._send_raw(data)
 
+    @property
+    def is_bridge_cast_x(self) -> bool:
+        """True once the firmware echo has identified a BRIDGE CAST X."""
+        return self._model_code == C.MODEL_CODE_BRIDGE_CAST_X
+
     def set_hw_strip_channel(self, strip_index: int, ch_key: str) -> None:
-        """Write hardware strip channel assignment to device (strip_index 0–3)."""
-        names = ["hw_strip_1_ch", "hw_strip_2_ch", "hw_strip_3_ch", "hw_strip_4_ch"]
-        if 0 <= strip_index < len(names):
+        """Write hardware strip channel assignment to device (strip_index 0-3)."""
+        if self.is_bridge_cast_x:
+            names = X_STRIP_PARAMS
+            value = C.X_STRIP_CH_VALUE.get(ch_key)
+        else:
+            names = HW_STRIP_PARAMS
             value = C.HW_STRIP_CH_VALUE.get(ch_key)
-            if value is not None:
-                self.set_parameter(names[strip_index], value)
+        if 0 <= strip_index < len(names) and value is not None:
+            self.set_parameter(names[strip_index], value)
 
     # ── Profile management ────────────────────────────────────────────────────
 
@@ -697,6 +720,7 @@ class BridgeCast(QObject):
     _ECHO_MODEL_CODES: dict[int, str] = {
         0x09: "Bridge Cast",
         0x03: "Bridge Cast V2",
+        0x01: "Bridge Cast X",
     }
 
     def _decode_firmware_echo(self, frame: dict) -> None:
@@ -731,9 +755,17 @@ class BridgeCast(QObject):
         if info == self._device_info:
             return
         self._device_info = info
+        was_x = self.is_bridge_cast_x
+        self._model_code = model_code
 
         log.info("Device: %s  Firmware: %s  (model_code=0x%02X)", model, firmware, model_code)
         self.device_info_updated.emit(model, firmware)
+        if self.is_bridge_cast_x and not was_x:
+            # The bulk sync may already have run before the model was known:
+            # (re)read the X knob assignments so the UI gets the real values.
+            for i, (sec, type_, hi, lo, size) in enumerate(_X_SYNC_FRAMES):
+                frame = build_read(sec, type_, hi, lo, size)
+                QTimer.singleShot(i * 5, lambda f=frame: self._send_raw(f))
 
     # ── Bulk DT1 dispatcher ───────────────────────────────────────────────────
 
@@ -1005,19 +1037,18 @@ class BridgeCast(QObject):
 
     # ── Strip assignment helpers ──────────────────────────────────────────────
 
-    _HW_STRIP_PARAM_INDEX: dict[str, int] = {
-        "hw_strip_1_ch": 0,
-        "hw_strip_2_ch": 1,
-        "hw_strip_3_ch": 2,
-        "hw_strip_4_ch": 3,
-    }
-
     def _on_strip_param_changed(self, name: str, value: int) -> None:
-        idx = self._HW_STRIP_PARAM_INDEX.get(name)
-        if idx is not None:
-            ch = C.HW_STRIP_VALUE_CH.get(value)
-            if ch is not None:
-                self.hw_strip_assignment_changed.emit(idx, ch)
+        # Each model has its own knob registers; the other model's bytes mean
+        # something else (on the X, 0x00/0x10/0x20/0x30 are not knob sources).
+        is_x = self.is_bridge_cast_x
+        names = X_STRIP_PARAMS if is_x else HW_STRIP_PARAMS
+        if name not in names:
+            return
+        idx = names.index(name)
+        table = C.X_STRIP_VALUE_CH if is_x else C.HW_STRIP_VALUE_CH
+        ch = table.get(value)
+        if ch is not None:
+            self.hw_strip_assignment_changed.emit(idx, ch)
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 

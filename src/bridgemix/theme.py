@@ -18,6 +18,7 @@ CH_GAME = "#22c55e"  # green
 CH_MUSIC = "#f59e0b"  # yellow
 CH_SYS = "#34d399"  # teal
 CH_SFX = "#fb7185"  # pink
+CH_HDMI = "#38bdf8"  # sky blue
 
 CHANNEL_COLORS: dict[str, str] = {
     "mic": CH_MIC,
@@ -27,6 +28,7 @@ CHANNEL_COLORS: dict[str, str] = {
     "music": CH_MUSIC,
     "sys": CH_SYS,
     "sfx": CH_SFX,
+    "hdmi": CH_HDMI,
 }
 
 # ── Surfaces ───────────────────────────────────────────────────────────────────

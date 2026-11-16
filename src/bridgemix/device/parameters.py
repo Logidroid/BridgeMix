@@ -60,6 +60,20 @@ LED = C.TYPE_STRIP_CONFIG  # 0x08
 HKY = C.TYPE_HOTKEY  # 0x09
 VFX_T = C.TYPE_VOICE_FX  # 0x7F
 
+# Knob-assignment parameters in physical order (strip 1-4).
+HW_STRIP_PARAMS: tuple[str, ...] = (
+    "hw_strip_1_ch",
+    "hw_strip_2_ch",
+    "hw_strip_3_ch",
+    "hw_strip_4_ch",
+)
+X_STRIP_PARAMS: tuple[str, ...] = (
+    "assign_ven_x_audio_mic",
+    "assign_ven_x_audio_chat",
+    "assign_ven_x_audio_hdmi",
+    "assign_ven_x_audio_game",
+)
+
 
 def _build_registry() -> dict[str, Parameter]:
     r: dict[str, Parameter] = {}
@@ -88,6 +102,17 @@ def _build_registry() -> dict[str, Parameter]:
         )
     )
     add(_p("st_sys_vol", SC, FAD, C.ADDR_ST_SYS_VOL, C.VOLUME_MIN, C.VOLUME_MAX, C.VOLUME_DEFAULT))
+    add(
+        _p(
+            "mix_level_st_hdmi",
+            SC,
+            FAD,
+            C.ADDR_ST_HDMI_VOL,
+            C.VOLUME_MIN,
+            C.VOLUME_MAX,
+            C.VOLUME_DEFAULT,
+        )
+    )
     add(
         _p(
             "st_sfx_vol",
@@ -123,6 +148,17 @@ def _build_registry() -> dict[str, Parameter]:
     add(_p("ps_sys_vol", SC, FAD, C.ADDR_PS_SYS_VOL, C.VOLUME_MIN, C.VOLUME_MAX, C.VOLUME_DEFAULT))
     add(
         _p(
+            "mix_level_ps_hdmi",
+            SC,
+            FAD,
+            C.ADDR_PS_HDMI_VOL,
+            C.VOLUME_MIN,
+            C.VOLUME_MAX,
+            C.VOLUME_DEFAULT,
+        )
+    )
+    add(
+        _p(
             "ps_sfx_vol",
             SC,
             FAD,
@@ -140,6 +176,7 @@ def _build_registry() -> dict[str, Parameter]:
     add(_p("st_game_mute", SC, FAD, C.ADDR_ST_GAME_MUTE, C.MUTE_ON, C.MUTE_OFF, C.MUTE_OFF))
     add(_p("st_music_mute", SC, FAD, C.ADDR_ST_MUSIC_MUTE, C.MUTE_ON, C.MUTE_OFF, C.MUTE_OFF))
     add(_p("st_sys_mute", SC, FAD, C.ADDR_ST_SYS_MUTE, C.MUTE_ON, C.MUTE_OFF, C.MUTE_OFF))
+    add(_p("mute_st_hdmi", SC, FAD, C.ADDR_ST_HDMI_MUTE, C.MUTE_ON, C.MUTE_OFF, C.MUTE_OFF))
 
     # ── Personal Mutes ────────────────────────────────────────────────────────
     add(_p("ps_mic_mute", SC, FAD, C.ADDR_PS_MIC_MUTE, C.MUTE_ON, C.MUTE_OFF, C.MUTE_OFF))
@@ -148,6 +185,7 @@ def _build_registry() -> dict[str, Parameter]:
     add(_p("ps_game_mute", SC, FAD, C.ADDR_PS_GAME_MUTE, C.MUTE_ON, C.MUTE_OFF, C.MUTE_OFF))
     add(_p("ps_music_mute", SC, FAD, C.ADDR_PS_MUSIC_MUTE, C.MUTE_ON, C.MUTE_OFF, C.MUTE_OFF))
     add(_p("ps_sys_mute", SC, FAD, C.ADDR_PS_SYS_MUTE, C.MUTE_ON, C.MUTE_OFF, C.MUTE_OFF))
+    add(_p("mute_ps_hdmi", SC, FAD, C.ADDR_PS_HDMI_MUTE, C.MUTE_ON, C.MUTE_OFF, C.MUTE_OFF))
 
     # ── Sub-Mix output volume (writable) ─────────────────────────────────────
     add(_p("submix_vol", SC, FAD, C.ADDR_SUBMIX_VOL, C.VOLUME_MIN, C.VOLUME_MAX, C.VOLUME_DEFAULT))
@@ -935,6 +973,20 @@ def _build_registry() -> dict[str, Parameter]:
     add(_p("hw_strip_2_ch", SC, LED, C.ADDR_HW_STRIP_2_CH, 0, 6, C.HW_STRIP_CH_AUX))
     add(_p("hw_strip_3_ch", SC, LED, C.ADDR_HW_STRIP_3_CH, 0, 6, C.HW_STRIP_CH_CHAT))
     add(_p("hw_strip_4_ch", SC, LED, C.ADDR_HW_STRIP_4_CH, 0, 6, C.HW_STRIP_CH_GAME))
+
+    # BRIDGE CAST X knob assignments — 14-bit words, MSB first (MSB at addr, LSB
+    # at addr+1).  Registered at the word address like the faders: a DT1 to addr
+    # carries [MSB=0, value], and the bulk dispatcher hands the LSB to this key.
+    # Defaults match what a factory X reports: MIC, CHAT, HDMI, GAME.
+    # Names follow the protocol dataset (the official app names each knob after
+    # its factory source); X_STRIP_PARAMS lists them in physical order.
+    for name, addr, default in zip(
+        X_STRIP_PARAMS,
+        (C.ADDR_X_STRIP_1_CH, C.ADDR_X_STRIP_2_CH, C.ADDR_X_STRIP_3_CH, C.ADDR_X_STRIP_4_CH),
+        (C.HW_STRIP_CH_MIC, C.HW_STRIP_CH_CHAT, C.HW_STRIP_CH_HDMI, C.HW_STRIP_CH_GAME),
+        strict=True,
+    ):
+        add(_p(name, SC, LED, addr, 0, 7, default))
 
     # ── Strip button action assignment (TYPE_STRIP_CONFIG = 0x08) ────────────
     # Addresses 0x04/0x14/0x24/0x34 confirmed 2026-05-22.

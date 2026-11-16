@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 )
 
 from bridgemix.device import constants as C
+from bridgemix.device.parameters import HW_STRIP_PARAMS, X_STRIP_PARAMS
 from bridgemix.gui.icons import chain_pixmap
 from bridgemix.gui.widgets.controls import PeakMeter, Slider
 from bridgemix.gui.widgets.input_strip import InputStrip, MicInputStrip
@@ -48,6 +49,10 @@ METER_MAX = C.METER_FULL_SCALE  # device 0 dBFS reference (not the raw 14-bit ce
 
 # All assignable logical channels (order determines combo display order).
 ALL_CHANNELS = ["mic", "aux", "chat", "game", "music", "sys", "sfx"]
+
+# BRIDGE CAST X adds HDMI and ships with a different factory layout.
+X_CHANNELS = ["mic", "aux", "chat", "game", "music", "sys", "sfx", "hdmi"]
+X_DEFAULT_HW = ["mic", "chat", "hdmi", "game"]
 
 # Default physical-strip → channel mapping at startup.
 _DEFAULT_HW = ["mic", "aux", "chat", "game"]
@@ -176,6 +181,17 @@ _CHANNEL_PARAMS: dict[str, dict] = {
         ps_mute=None,
         st_mk="ps_sfx",
         ps_mk="ps_sfx",
+    ),
+    # HDMI has its own mix parameters on the X; there is no confirmed meter slot
+    # for it yet, so the strip shows the controls without a level bar.
+    "hdmi": dict(
+        label="HDMI",
+        st_vol="mix_level_st_hdmi",
+        ps_vol="mix_level_ps_hdmi",
+        st_mute="mute_st_hdmi",
+        ps_mute="mute_ps_hdmi",
+        st_mk=None,
+        ps_mk=None,
     ),
 }
 
@@ -322,8 +338,10 @@ class HomePage(QWidget):
     def __init__(self, bridge: BridgeCast, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._bridge = bridge
+        # Sources a physical knob can take on the detected model (X adds HDMI).
+        self._knob_channels: list[str] = self._assignable_channels()
         # Current logical channel assigned to each physical strip (index 0–3).
-        self._hw_channels: list[str] = list(_DEFAULT_HW)
+        self._hw_channels: list[str] = self._device_hw_channels()
         # InputStrip widgets in physical order.
         self._hw_strip_widgets: list[InputStrip] = []
         # Current accent CSS color per HW strip index (empty string = not yet known).
@@ -351,6 +369,7 @@ class HomePage(QWidget):
         lay.setSpacing(16)
 
         bridge.hw_strip_assignment_changed.connect(self._on_hw_assignment_from_device)
+        bridge.device_info_updated.connect(self._on_device_info)
 
         lay.addWidget(self._inputs_block(bridge))
 
@@ -433,7 +452,7 @@ class HomePage(QWidget):
                 p["ps_mute"],
                 p["st_mk"],
                 p["ps_mk"],
-                ALL_CHANNELS,
+                self._knob_channels,
                 i,
             )
             strip.channel_assignment_requested.connect(
@@ -473,7 +492,7 @@ class HomePage(QWidget):
                 item.widget().deleteLater()
 
         self._virtual_strip_widgets = []
-        virtual = [ch for ch in ALL_CHANNELS if ch not in self._hw_channels]
+        virtual = [ch for ch in self._knob_channels if ch not in self._hw_channels]
         for ch_key in virtual:
             p = _CHANNEL_PARAMS[ch_key]
             w = self._virtual_strip(
@@ -538,6 +557,48 @@ class HomePage(QWidget):
             ALL_CHANNELS,
         )
 
+    # ── Model-dependent channel list ──────────────────────────────────────────
+
+    def _assignable_channels(self) -> list[str]:
+        """Channels the detected model can put on a physical knob."""
+        return X_CHANNELS if self._bridge.is_bridge_cast_x else ALL_CHANNELS
+
+    def _device_hw_channels(self) -> list[str]:
+        """Knob sources from the bridge cache (factory layout until the device answers)."""
+        if self._bridge.is_bridge_cast_x:
+            names, table, defaults = X_STRIP_PARAMS, C.X_STRIP_VALUE_CH, X_DEFAULT_HW
+        else:
+            names, table, defaults = HW_STRIP_PARAMS, C.HW_STRIP_VALUE_CH, _DEFAULT_HW
+        channels = [
+            table.get(self._bridge.get_parameter(n), d)
+            for n, d in zip(names, defaults, strict=True)
+        ]
+        # The strip UI assumes one knob per source; fall back on duplicates.
+        return channels if len(set(channels)) == len(channels) else list(defaults)
+
+    def _on_device_info(self, model: str, firmware: str) -> None:
+        """Switch the knob layout and assignment menus once the model is known."""
+        channels = self._assignable_channels()
+        if channels == self._knob_channels:
+            return
+        self._knob_channels = channels
+        self._hw_channels = self._device_hw_channels()
+        for strip, ch_key in zip(self._hw_strip_widgets, self._hw_channels, strict=True):
+            strip.set_channel_choices(channels)
+            p = _CHANNEL_PARAMS[ch_key]
+            strip.rebind(
+                ch_key,
+                p["label"],
+                CHANNEL_COLORS[ch_key],
+                p["st_vol"],
+                p["ps_vol"],
+                p["st_mute"],
+                p["ps_mute"],
+                p["st_mk"],
+                p["ps_mk"],
+            )
+        self._rebuild_virtual_strips()
+
     # ── Hardware strip channel reassignment ───────────────────────────────────
 
     def _on_hw_channel_changed(self, hw_index: int, new_ch: str) -> None:
@@ -586,7 +647,7 @@ class HomePage(QWidget):
 
     def _on_hw_assignment_from_device(self, strip_index: int, ch_key: str) -> None:
         """Apply a strip assignment received from the device — no write-back."""
-        if self._hw_channels[strip_index] == ch_key:
+        if self._hw_channels[strip_index] == ch_key or ch_key not in self._knob_channels:
             return
 
         old_ch = self._hw_channels[strip_index]

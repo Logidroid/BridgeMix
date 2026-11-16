@@ -26,6 +26,7 @@ ADDR_ST_GAME_VOL: int = 0x06
 ADDR_ST_MUSIC_VOL: int = 0x08
 ADDR_ST_SYS_VOL: int = 0x0A
 ADDR_ST_SFX_VOL: int = 0x0C
+ADDR_ST_HDMI_VOL: int = 0x0E  # BRIDGE CAST X only
 
 # ── Personal-mix volume addresses  (SECTION_CHANNEL, TYPE_FADER) ─────────────
 ADDR_PS_MIC_VOL: int = 0x10
@@ -35,6 +36,7 @@ ADDR_PS_GAME_VOL: int = 0x16
 ADDR_PS_MUSIC_VOL: int = 0x18
 ADDR_PS_SYS_VOL: int = 0x1A
 ADDR_PS_SFX_VOL: int = 0x1C
+ADDR_PS_HDMI_VOL: int = 0x1E  # BRIDGE CAST X only
 
 # ── Mic "third channel" — un-bussed raw mic tap ───────────────────────────────
 ADDR_MIC_DIRECT_VOL: int = 0x54  # un-bussed mic feed (writability unverified)
@@ -58,6 +60,7 @@ ADDR_ST_CHAT_MUTE: int = 0x24
 ADDR_ST_GAME_MUTE: int = 0x26
 ADDR_ST_MUSIC_MUTE: int = 0x28
 ADDR_ST_SYS_MUTE: int = 0x2A
+ADDR_ST_HDMI_MUTE: int = 0x2E  # BRIDGE CAST X only
 ST_MUTE_ADDRESSES: tuple[int, int, int, int] = (
     ADDR_ST_MIC_MUTE,
     ADDR_ST_AUX_MUTE,
@@ -80,6 +83,7 @@ ADDR_PS_CHAT_MUTE: int = 0x34
 ADDR_PS_GAME_MUTE: int = 0x36
 ADDR_PS_MUSIC_MUTE: int = 0x38
 ADDR_PS_SYS_MUTE: int = 0x3A
+ADDR_PS_HDMI_MUTE: int = 0x3E  # BRIDGE CAST X only
 PS_MUTE_ADDRESSES: tuple[int, int, int, int] = (
     ADDR_PS_MIC_MUTE,
     ADDR_PS_AUX_MUTE,
@@ -213,6 +217,24 @@ HW_STRIP_CH_VALUE: dict[str, int] = {
     "sfx": HW_STRIP_CH_SFX,
 }
 HW_STRIP_VALUE_CH: dict[int, str] = {v: k for k, v in HW_STRIP_CH_VALUE.items()}
+
+# ── BRIDGE CAST X strip assignment (SECTION_CHANNEL, TYPE_STRIP_CONFIG) ───────
+# The X does not use ADDR_HW_STRIP_*_CH. Its four knobs are word parameters at
+# 0x60/0x62/0x64/0x66, 14-bit MSB-first, confirmed by reading a live X (FW 1.02)
+# and by the official app's ChAssignSouceVenderXE table (MainExeFile 5.0.1.722).
+ADDR_X_STRIP_1_CH: int = 0x60  # assign_ven_x_audio_mic
+ADDR_X_STRIP_2_CH: int = 0x62  # assign_ven_x_audio_chat
+ADDR_X_STRIP_3_CH: int = 0x64  # assign_ven_x_audio_hdmi
+ADDR_X_STRIP_4_CH: int = 0x66  # assign_ven_x_audio_game
+
+HW_STRIP_CH_HDMI: int = 0x07  # X only
+
+X_STRIP_CH_VALUE: dict[str, int] = {**HW_STRIP_CH_VALUE, "hdmi": HW_STRIP_CH_HDMI}
+X_STRIP_VALUE_CH: dict[int, str] = {v: k for k, v in X_STRIP_CH_VALUE.items()}
+
+# Firmware-echo model code that marks a BRIDGE CAST X (payload[3] of the 7-byte
+# V2 echo layout; seen on FW 1.02 build 67).
+MODEL_CODE_BRIDGE_CAST_X: int = 0x01
 
 # ── Live Level Meter — 127-byte State Vector ──────────────────────────────────
 # SECTION_STATUS (0x01), type=0x10, addr=0x00. Sent every ~50 ms.
