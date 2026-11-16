@@ -40,6 +40,7 @@ ADDR_PAD_SET_NO = 0x36  # SECTION_CHANNEL / TYPE_SWITCH: current pad set, 0-4
 
 NAME_LEN = 18
 OFF_FUNC = 0x20
+OFF_COLOR = 0x22  # red, green, blue words, 0-32 each
 OFF_OPT1 = 0x28
 OFF_OPT2 = 0x2A
 
@@ -104,6 +105,7 @@ class Pad:
     func: int  # raw 14-bit function word
     opt1: int
     opt2: int
+    color: tuple[int, int, int] = (0, 0, 0)  # pad light, 0-32 per channel
 
     @property
     def command(self) -> int:
@@ -166,7 +168,8 @@ def decode_pad(number: int, data: bytes | tuple[int, ...] | list[int]) -> Pad | 
     def word(off: int) -> int:
         return (data[off] << 7) | data[off + 1]
 
-    return Pad(number, decode_name(data), word(OFF_FUNC), word(OFF_OPT1), word(OFF_OPT2))
+    color = (word(OFF_COLOR), word(OFF_COLOR + 2), word(OFF_COLOR + 4))
+    return Pad(number, decode_name(data), word(OFF_FUNC), word(OFF_OPT1), word(OFF_OPT2), color)
 
 
 def sound_pad_function(pad_set: int, number: int) -> tuple[int, int, int]:

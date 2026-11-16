@@ -1,10 +1,11 @@
 """
-Pads panel — gives each BRIDGE CAST X control pad a sound that BridgeMix keeps
-and plays, and sets where the sounds play.
+Pads panel — the six BRIDGE CAST X control pads drawn as on the device, a
+sound for each, and where the sounds play.
 
 A sound pad sends its own MIDI CC (see bridgemix.device.pads); BridgeMix plays
 the file saved for that pad.  Every pad of every pad set can have its own
 sound; the tab shows the pads of the pad set that is active on the device.
+Click a pad to edit it; a pad lights up when you press it on the device.
 """
 
 from __future__ import annotations
@@ -12,7 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -25,10 +27,12 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from bridgemix import theme
 from bridgemix.device import pads
 from bridgemix.gui.widgets.controls import ScrollGuardComboBox, Slider
 from bridgemix.routing import backend
@@ -41,6 +45,8 @@ if TYPE_CHECKING:
 _HINT_STYLE = "font-size: 12px; color: #9a9aa2; background-color: transparent;"
 _FILE_FILTER = "Sounds (" + " ".join(f"*{s}" for s in store.SUPPORTED_SUFFIXES) + ")"
 _SOUND_ITEM = "BridgeMix sound"
+_COLUMNS = 2  # pads 1-2 on the first row, 3-4 on the second, 5-6 on the third
+_FLASH_MS = 300
 
 
 def _hint(text: str) -> QLabel:
@@ -50,81 +56,93 @@ def _hint(text: str) -> QLabel:
     return label
 
 
-class _PadRow:
-    """The widgets of one pad, in the pads grid."""
+def _pad_color(pad: pads.Pad | None) -> QColor:
+    """The pad's light colour (device values 0-32), grey if it has none."""
+    if pad is None or not any(pad.color):
+        return QColor(theme.TEXT_FAINT)
+    r, g, b = (min(255, c * 255 // 32) for c in pad.color)
+    return QColor(r, g, b)
 
-    def __init__(self, panel: PadsPanel, number: int, grid: QGridLayout) -> None:
+
+class _PadTile(QWidget):
+    """One on-screen pad: coloured like its light, with its name and function."""
+
+    clicked = pyqtSignal(int)
+
+    def __init__(self, number: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
         self.number = number
-        row = number - 1
-        grid.addWidget(QLabel(f"PAD {number}"), row, 0)
+        self.pad: pads.Pad | None = None
+        self.detail = ""
+        self.selected = False
+        self._lit = False
+        self.setMinimumSize(150, 96)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._flash_timer = QTimer(self)
+        self._flash_timer.setSingleShot(True)
+        self._flash_timer.timeout.connect(self._unlight)
 
-        self.name = QLabel("—")
-        self.name.setStyleSheet("color: #9a9aa2; background: transparent;")
-        self.name.setMinimumWidth(90)
-        grid.addWidget(self.name, row, 1)
+    def set_pad(self, pad: pads.Pad, detail: str) -> None:
+        self.pad, self.detail = pad, detail
+        self.setToolTip(f"PAD {self.number}: {detail}")
+        self.update()
 
-        self.function = ScrollGuardComboBox()
-        self.function.setMinimumWidth(170)
-        self.function.setEnabled(False)
-        self.function.currentIndexChanged.connect(lambda _i: panel._on_function(number))
-        grid.addWidget(self.function, row, 2)
+    def set_selected(self, selected: bool) -> None:
+        self.selected = selected
+        self.update()
 
-        self.file = QLabel("No sound")
-        self.file.setMinimumWidth(140)
-        grid.addWidget(self.file, row, 3)
+    def flash(self) -> None:
+        self._lit = True
+        self._flash_timer.start(_FLASH_MS)
+        self.update()
 
-        self.choose = QPushButton("Choose…")
-        self.choose.clicked.connect(lambda: panel._choose(number))
-        grid.addWidget(self.choose, row, 4)
+    def _unlight(self) -> None:
+        self._lit = False
+        self.update()
 
-        self.play = QPushButton("▶")
-        self.play.setFixedWidth(32)
-        self.play.setToolTip("Preview (only you hear it)")
-        self.play.clicked.connect(lambda: panel._preview(number))
-        grid.addWidget(self.play, row, 5)
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.number)
 
-        self.stop = QPushButton("■")
-        self.stop.setFixedWidth(32)
-        self.stop.setToolTip("Stop")
-        self.stop.clicked.connect(lambda: panel._stop(number))
-        grid.addWidget(self.stop, row, 6)
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = _pad_color(self.pad)
+        rect = QRectF(self.rect()).adjusted(3, 3, -3, -3)
 
-        self.volume = Slider(Qt.Orientation.Horizontal)
-        self.volume.setRange(0, 100)
-        self.volume.setFixedWidth(100)
-        self.volume_value = QLabel()
-        self.volume_value.setFixedWidth(40)
-        self.volume.valueChanged.connect(lambda v: self.volume_value.setText(f"{v}%"))
-        self.volume.valueChanged.connect(lambda v: panel._set_volume(number, v))
-        grid.addWidget(self.volume, row, 7)
-        grid.addWidget(self.volume_value, row, 8)
+        fill = QColor(color)
+        fill.setAlpha(200 if self._lit else 38)
+        p.setBrush(fill)
+        border = QColor(theme.ACCENT) if self.selected else color
+        p.setPen(QPen(border, 3 if self.selected else 2))
+        p.drawRoundedRect(rect, 10, 10)
 
-        self.press_again = QCheckBox("Press again stops")
-        self.press_again.setToolTip("Off: pressing the pad again restarts the sound")
-        self.press_again.toggled.connect(lambda on: panel._set_press_again(number, on))
-        grid.addWidget(self.press_again, row, 9)
+        text_rect = rect.adjusted(10, 6, -10, -6)
+        font = QFont(self.font())
+        font.setPointSizeF(8.5)
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor(theme.TEXT if self._lit else theme.TEXT_MUTED))
+        p.drawText(
+            text_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, f"PAD {self.number}"
+        )
 
-        self.clear = QPushButton("✕")
-        self.clear.setFixedWidth(32)
-        self.clear.setToolTip("Remove the sound and give the pad its previous function back")
-        self.clear.clicked.connect(lambda: panel._clear(number))
-        grid.addWidget(self.clear, row, 10)
+        font.setPointSizeF(11.5)
+        p.setFont(font)
+        p.setPen(QColor(theme.TEXT))
+        name = self.pad.name if self.pad and self.pad.name else "—"
+        p.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, name)
 
-    def show_sound(self, sound: store.PadSound | None, can_play: bool) -> None:
-        for w in (self.volume, self.press_again):
-            w.blockSignals(True)
-        has_file = sound is not None and bool(sound.file)
-        self.file.setText(store.display_name(sound.file) if has_file else "No sound")
-        self.file.setToolTip(sound.file if has_file else "Choose a sound file")
-        volume = sound.volume if sound is not None else store.PadSound().volume
-        self.volume.setValue(volume)
-        self.volume_value.setText(f"{volume}%")
-        self.press_again.setChecked(bool(sound and sound.press_again_stops))
-        self.play.setEnabled(can_play and has_file)
-        self.stop.setEnabled(can_play and has_file)
-        self.clear.setEnabled(has_file)
-        for w in (self.volume, self.press_again):
-            w.blockSignals(False)
+        font.setPointSizeF(8.5)
+        font.setBold(False)
+        p.setFont(font)
+        p.setPen(QColor(theme.TEXT if self._lit else theme.TEXT_MUTED))
+        detail = p.fontMetrics().elidedText(
+            self.detail, Qt.TextElideMode.ElideRight, int(text_rect.width())
+        )
+        p.drawText(text_rect, Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, detail)
+        p.end()
 
 
 class PadsPanel(QWidget):
@@ -134,7 +152,8 @@ class PadsPanel(QWidget):
         super().__init__(parent)
         self._bridge = bridge
         self._player = player
-        self._rows: dict[int, _PadRow] = {}
+        self._tiles: dict[int, _PadTile] = {}
+        self._selected = 1
         self._app_checks: dict[str, QCheckBox] = {}
 
         scroll = QScrollArea()
@@ -164,10 +183,11 @@ class PadsPanel(QWidget):
 
         bridge.pad_changed.connect(self._on_pad)
         bridge.parameter_changed.connect(self._on_param)
+        bridge.control_change.connect(self._on_control_change)
         bridge.device_info_updated.connect(lambda *_: self._update_model())
         bridge.connected.connect(lambda _c: self._update_model())
         self._update_model()
-        self._show_sounds()
+        self._select(1)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -186,10 +206,14 @@ class PadsPanel(QWidget):
     def _key(self, number: int) -> str:
         return store.pad_key(self._pad_set(), number)
 
-    def _show_sounds(self) -> None:
-        settings = store.load()
-        for number, row in self._rows.items():
-            row.show_sound(settings.pads.get(self._key(number)), self._player is not None)
+    def _detail(self, pad: pads.Pad) -> str:
+        """What the pad does, for its tile: its sound or its device function."""
+        if pad.is_sound_pad(self._pad_set()):
+            sound = store.load().pads.get(self._key(pad.number))
+            if sound and sound.file:
+                return f"Sound: {store.display_name(sound.file)}"
+            return "Sound: none yet"
+        return pad.describe()
 
     # ── pads ──────────────────────────────────────────────────────────────────
 
@@ -197,10 +221,11 @@ class PadsPanel(QWidget):
         grp = QGroupBox("PADS")
         lay = QVBoxLayout(grp)
         lay.setContentsMargins(10, 6, 10, 10)
-        lay.setSpacing(8)
+        lay.setSpacing(10)
 
         top = QHBoxLayout()
         self._pad_set_lbl = QLabel()
+        self._pad_set_lbl.setStyleSheet("font-weight: 700; background: transparent;")
         top.addWidget(self._pad_set_lbl)
         top.addStretch()
         refresh = QPushButton("Read pads")
@@ -209,24 +234,134 @@ class PadsPanel(QWidget):
         top.addWidget(refresh)
         lay.addLayout(top)
 
+        body = QHBoxLayout()
+        body.setSpacing(16)
         grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
+        grid.setSpacing(10)
         for n in range(1, pads.PAD_COUNT + 1):
-            self._rows[n] = _PadRow(self, n, grid)
-        grid.setColumnStretch(3, 1)
-        lay.addLayout(grid)
+            tile = _PadTile(n)
+            tile.clicked.connect(self._select)
+            self._tiles[n] = tile
+            grid.addWidget(tile, (n - 1) // _COLUMNS, (n - 1) % _COLUMNS)
+        grid_box = QWidget()
+        grid_box.setLayout(grid)
+        grid_box.setFixedWidth(_COLUMNS * 175)
+        body.addWidget(grid_box, alignment=Qt.AlignmentFlag.AlignTop)
+        body.addWidget(self._make_editor(), stretch=1, alignment=Qt.AlignmentFlag.AlignTop)
+        lay.addLayout(body)
+
         lay.addWidget(
             _hint(
-                "Choose a file to make the pad play it. BridgeMix keeps a copy "
-                "(WAV, FLAC, OGG or MP3), and every pad of every pad set can have "
-                "its own sound: switch pad sets on the device to set up the others. "
-                "The pad's previous function is kept, so ✕ or the function list "
-                "gives it back."
+                "Click a pad to set it up. Choose a file and the pad plays it: "
+                "BridgeMix keeps a copy (WAV, FLAC, OGG or MP3), and every pad of "
+                "every pad set can have its own sound. Switch pad sets on the device "
+                "to set up the others. The pad's previous function is kept, so "
+                "Remove or the function list gives it back. A pad lights up here "
+                "when you press it on the device."
             )
         )
         self._update_pad_set_label()
         return grp
+
+    def _make_editor(self) -> QGroupBox:
+        self._editor = QGroupBox()
+        form = QFormLayout(self._editor)
+        form.setContentsMargins(12, 8, 12, 10)
+        form.setSpacing(10)
+
+        self._function = ScrollGuardComboBox()
+        self._function.setEnabled(False)
+        self._function.currentIndexChanged.connect(lambda _i: self._on_function())
+        form.addRow("Function:", self._function)
+
+        sound_row = QHBoxLayout()
+        self._file_lbl = QLabel("No sound")
+        self._file_lbl.setMinimumWidth(160)
+        sound_row.addWidget(self._file_lbl, stretch=1)
+        choose = QPushButton("Choose…")
+        choose.clicked.connect(self._choose)
+        sound_row.addWidget(choose)
+        self._remove_btn = QPushButton("Remove")
+        self._remove_btn.setToolTip("Remove the sound and give the pad its previous function back")
+        self._remove_btn.clicked.connect(self._clear)
+        sound_row.addWidget(self._remove_btn)
+        form.addRow("Sound:", sound_row)
+
+        play_row = QHBoxLayout()
+        self._play_btn = QPushButton("Play")
+        self._play_btn.setToolTip("Preview: only you hear it")
+        self._play_btn.clicked.connect(self._preview)
+        play_row.addWidget(self._play_btn)
+        self._stop_btn = QPushButton("Stop")
+        self._stop_btn.clicked.connect(self._stop)
+        play_row.addWidget(self._stop_btn)
+        play_row.addStretch()
+        form.addRow("Preview:", play_row)
+
+        volume_row = QHBoxLayout()
+        self._volume = Slider(Qt.Orientation.Horizontal)
+        self._volume.setRange(0, 100)
+        self._volume_lbl = QLabel()
+        self._volume_lbl.setFixedWidth(44)
+        self._volume.valueChanged.connect(lambda v: self._volume_lbl.setText(f"{v}%"))
+        self._volume.valueChanged.connect(self._set_volume)
+        volume_row.addWidget(self._volume, stretch=1)
+        volume_row.addWidget(self._volume_lbl)
+        form.addRow("Volume:", volume_row)
+
+        self._press_again = QCheckBox("Pressing the pad again stops the sound")
+        self._press_again.setToolTip("Off: pressing the pad again restarts the sound")
+        self._press_again.toggled.connect(self._set_press_again)
+        form.addRow("", self._press_again)
+        return self._editor
+
+    def _select(self, number: int) -> None:
+        self._selected = number
+        for n, tile in self._tiles.items():
+            tile.set_selected(n == number)
+        self._editor.setTitle(f"PAD {number}")
+        self._show_function()
+        self._show_sound()
+
+    def _show_sound(self) -> None:
+        sound = store.load().pads.get(self._key(self._selected))
+        has_file = sound is not None and bool(sound.file)
+        for w in (self._volume, self._press_again):
+            w.blockSignals(True)
+        self._file_lbl.setText(store.display_name(sound.file) if has_file else "No sound")
+        self._file_lbl.setToolTip(sound.file if has_file else "")
+        volume = sound.volume if sound is not None else store.PadSound().volume
+        self._volume.setValue(volume)
+        self._volume_lbl.setText(f"{volume}%")
+        self._press_again.setChecked(bool(sound and sound.press_again_stops))
+        can_play = self._player is not None and has_file
+        self._play_btn.setEnabled(can_play)
+        self._stop_btn.setEnabled(can_play)
+        self._remove_btn.setEnabled(has_file)
+        for w in (self._volume, self._press_again):
+            w.blockSignals(False)
+
+    def _show_function(self) -> None:
+        pad = self._bridge.control_pads.get(self._selected)
+        combo = self._function
+        combo.blockSignals(True)
+        combo.clear()
+        if pad is None:
+            combo.addItem("Not read yet", "none")
+            combo.setEnabled(False)
+            combo.blockSignals(False)
+            return
+        is_sound = pad.is_sound_pad(self._pad_set())
+        backup = store.load().pad_backup.get(self._key(pad.number))
+        if not is_sound:
+            combo.addItem(f"{pad.describe()} (device)", "keep")
+        elif backup is not None:
+            previous = pads.Pad(pad.number, "", *backup)
+            combo.addItem(f"{previous.describe()} (device)", "restore")
+        combo.addItem(_SOUND_ITEM, "sound")
+        combo.setCurrentIndex(max(0, combo.findData("sound" if is_sound else "keep")))
+        combo.setEnabled(True)
+        combo.blockSignals(False)
 
     def _update_model(self) -> None:
         is_x = self._bridge.is_bridge_cast_x
@@ -238,31 +373,29 @@ class PadsPanel(QWidget):
     def _on_param(self, name: str, _value: int) -> None:
         if name == "pad_set_no":
             self._update_pad_set_label()
-            self._show_sounds()
+            self._show_sound()
             self._bridge.request_pads()  # the device loaded the pads of that set
 
     def _update_pad_set_label(self) -> None:
         self._pad_set_lbl.setText(f"Pad set {self._pad_set() + 1}")
 
     def _on_pad(self, pad: pads.Pad) -> None:
-        row = self._rows.get(pad.number)
-        if row is None:
+        tile = self._tiles.get(pad.number)
+        if tile is None:
             return
-        row.name.setText(pad.name or "—")
-        is_sound = pad.is_sound_pad(self._pad_set())
-        backup = store.load().pad_backup.get(self._key(pad.number))
-        combo = row.function
-        combo.blockSignals(True)
-        combo.clear()
-        if not is_sound:
-            combo.addItem(f"{pad.describe()} (device)", "keep")
-        elif backup is not None:
-            previous = pads.Pad(pad.number, "", *backup)
-            combo.addItem(f"{previous.describe()} (device)", "restore")
-        combo.addItem(_SOUND_ITEM, "sound")
-        combo.setCurrentIndex(max(0, combo.findData("sound" if is_sound else "keep")))
-        combo.setEnabled(True)
-        combo.blockSignals(False)
+        tile.set_pad(pad, self._detail(pad))
+        if pad.number == self._selected:
+            self._show_function()
+
+    def _refresh_tile(self, number: int) -> None:
+        pad = self._bridge.control_pads.get(number)
+        if pad is not None:
+            self._tiles[number].set_pad(pad, self._detail(pad))
+
+    def _on_control_change(self, channel: int, control: int, value: int) -> None:
+        found = pads.pad_for_cc(channel, control)
+        if found is not None and value and found[0] == self._pad_set():
+            self._tiles[found[1]].flash()
 
     def _make_sound_pad(self, number: int) -> bool:
         """Turn pad *number* into a sound pad, keeping its previous function."""
@@ -277,7 +410,7 @@ class PadsPanel(QWidget):
         store.save(settings)
         if not self._bridge.assign_pad(number, *pads.sound_pad_function(pad_set, number)):
             return False
-        self._rows[number].function.setEnabled(False)  # until the device reads back
+        self._function.setEnabled(False)  # until the device reads back
         return True
 
     def _restore_pad(self, number: int) -> None:
@@ -289,10 +422,11 @@ class PadsPanel(QWidget):
         if self._bridge.assign_pad(number, *backup):
             settings.pad_backup.pop(self._key(number), None)
             store.save(settings)
-            self._rows[number].function.setEnabled(False)
+            self._function.setEnabled(False)
 
-    def _on_function(self, number: int) -> None:
-        choice = self._rows[number].function.currentData()
+    def _on_function(self) -> None:
+        number = self._selected
+        choice = self._function.currentData()
         if choice == "sound":
             ok = self._make_sound_pad(number)
         elif choice == "restore":
@@ -300,13 +434,13 @@ class PadsPanel(QWidget):
             ok = True
         else:
             return
-        pad = self._bridge.control_pads.get(number)
-        if not ok and pad is not None:
-            self._on_pad(pad)  # not connected: show the pad as it is
+        if not ok:
+            self._show_function()  # not connected: show the pad as it is
 
-    # ── sounds ────────────────────────────────────────────────────────────────
+    # ── the selected pad's sound ──────────────────────────────────────────────
 
-    def _choose(self, number: int) -> None:
+    def _choose(self) -> None:
+        number = self._selected
         path, _ = QFileDialog.getOpenFileName(
             self, f"Sound for pad {number}", str(Path.home()), _FILE_FILTER
         )
@@ -321,7 +455,8 @@ class PadsPanel(QWidget):
         settings = store.load()
         settings.pads.setdefault(key, store.PadSound()).file = str(copy)
         store.save(settings)
-        self._show_sounds()
+        self._show_sound()
+        self._refresh_tile(number)
         if not self._make_sound_pad(number):
             QMessageBox.warning(
                 self,
@@ -330,7 +465,8 @@ class PadsPanel(QWidget):
                 "BRIDGE CAST X connected?",
             )
 
-    def _clear(self, number: int) -> None:
+    def _clear(self) -> None:
+        number = self._selected
         key = self._key(number)
         if self._player is not None:
             self._player.stop(key)
@@ -338,25 +474,28 @@ class PadsPanel(QWidget):
         settings = store.load()
         settings.pads.pop(key, None)
         store.save(settings)
-        self._show_sounds()
+        self._show_sound()
+        self._refresh_tile(number)
         self._restore_pad(number)
 
-    def _preview(self, number: int) -> None:
+    def _preview(self) -> None:
         if self._player is not None:
-            self._player.play(self._key(number), voice_chat=False)
+            self._player.play(self._key(self._selected), voice_chat=False)
+            self._tiles[self._selected].flash()
 
-    def _stop(self, number: int) -> None:
+    def _stop(self) -> None:
         if self._player is not None:
-            self._player.stop(self._key(number))
+            self._player.stop(self._key(self._selected))
 
-    def _set_volume(self, number: int, volume: int) -> None:
+    def _set_volume(self, volume: int) -> None:
         settings = store.load()
-        settings.pads.setdefault(self._key(number), store.PadSound()).volume = volume
+        settings.pads.setdefault(self._key(self._selected), store.PadSound()).volume = volume
         store.save(settings)
 
-    def _set_press_again(self, number: int, on: bool) -> None:
+    def _set_press_again(self, on: bool) -> None:
         settings = store.load()
-        settings.pads.setdefault(self._key(number), store.PadSound()).press_again_stops = on
+        sound = settings.pads.setdefault(self._key(self._selected), store.PadSound())
+        sound.press_again_stops = on
         store.save(settings)
 
     # ── where the sounds play ─────────────────────────────────────────────────
@@ -375,8 +514,7 @@ class PadsPanel(QWidget):
         self._apps_lay = QHBoxLayout(apps_row)
         self._apps_lay.setContentsMargins(0, 0, 0, 0)
         self._apps_lay.setSpacing(12)
-        refresh = QPushButton("↻")
-        refresh.setFixedWidth(32)
+        refresh = QPushButton("Refresh")
         refresh.setToolTip("Look again for apps that are recording")
         refresh.clicked.connect(self._refresh_apps)
         self._apps_lay.addWidget(refresh)
