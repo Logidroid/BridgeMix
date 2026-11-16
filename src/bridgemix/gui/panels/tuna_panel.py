@@ -120,6 +120,7 @@ class TunaPanel(QWidget):
         note.setStyleSheet(_HINT_STYLE)
         lay.addWidget(note)
         self._refresh_library()
+        pads_panel.pads_changed.connect(self._refresh_pad_buttons)
 
     # ── web view ──────────────────────────────────────────────────────────────
 
@@ -291,8 +292,10 @@ class TunaPanel(QWidget):
             btn.setEnabled(has)
 
     def _refresh_pad_buttons(self) -> None:
+        """Offer the pads of the current bank, except the bank pads."""
         self._bank.setText(f"Put on a pad of {self._pads.bank_label()}:")
         for n, btn in enumerate(self._pad_buttons, start=1):
+            btn.setVisible(not self._pads.is_bank_pad(n))
             btn.setToolTip(f"PAD {n} now: {self._pads.pad_label(n)}")
 
     def _selected_file(self) -> Path | None:

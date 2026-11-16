@@ -150,6 +150,8 @@ class _PadTile(QWidget):
 
 
 class PadsPanel(QWidget):
+    pads_changed = pyqtSignal()  # a pad, the bank or a sound changed (the Tuna page follows)
+
     def __init__(
         self, bridge: BridgeCast, player: SoundPlayer | None, parent: QWidget | None = None
     ) -> None:
@@ -311,7 +313,8 @@ class PadsPanel(QWidget):
                 "1-5 are the device's pad sets 1-5: their functions and colours are "
                 "saved in the device. Banks 6 and up use the functions of the pad set "
                 "you pick and keep their own colours in BridgeMix. The pad's previous "
-                "function is kept, so Remove or the function list gives it back. A pad "
+                "function is kept: the Function list gives it back. Delete sound only "
+                "deletes this bank's sound. A pad "
                 "lights up here when you press it on the device."
             )
         )
@@ -343,6 +346,7 @@ class PadsPanel(QWidget):
         self._bank_pad_set.blockSignals(False)
 
     def _bank_changed(self) -> None:
+        self.pads_changed.emit()
         self._show_bank()
         self._show_sound()
         self._show_color()
@@ -421,8 +425,10 @@ class PadsPanel(QWidget):
         self._choose_btn = QPushButton("Choose…")
         self._choose_btn.clicked.connect(self._choose)
         sound_row.addWidget(self._choose_btn)
-        self._remove_btn = QPushButton("Remove")
-        self._remove_btn.setToolTip("Remove the sound and give the pad its previous function back")
+        self._remove_btn = QPushButton("Delete sound")
+        self._remove_btn.setToolTip(
+            "Delete this pad's sound in this bank; what the pad does doesn't change"
+        )
         self._remove_btn.clicked.connect(self._clear)
         sound_row.addWidget(self._remove_btn)
         form.addRow("Sound:", sound_row)
@@ -608,6 +614,7 @@ class PadsPanel(QWidget):
         if tile is None:
             return
         tile.set_pad(pad, self._detail(pad))
+        self.pads_changed.emit()
         if pad.number == self._selected:
             self._show_function()
             self._show_sound()
@@ -681,6 +688,9 @@ class PadsPanel(QWidget):
     def _on_function(self) -> None:
         number = self._selected
         choice = self._function.currentData()
+        if choice == "sound" and not self._confirm_replace_bank_pad(number):
+            self._show_function()  # keep it a bank pad
+            return
         if choice in ("sound", *_BANK_ITEMS):
             ok = self._assign(number, choice)
         elif choice == "restore":
@@ -701,9 +711,29 @@ class PadsPanel(QWidget):
         if path:
             self.assign_file(number, Path(path))
 
+    def is_bank_pad(self, number: int) -> bool:
+        """True if pad *number* goes to the previous / next bank."""
+        pad = self._bridge.control_pads.get(number)
+        return pad is not None and pad.bank_step is not None
+
+    def _confirm_replace_bank_pad(self, number: int) -> bool:
+        """Ask before a sound replaces a bank pad, which would stop it changing banks."""
+        if not self.is_bank_pad(number):
+            return True
+        pad_set = self._pad_set() + 1
+        answer = QMessageBox.question(
+            self,
+            "Bank pad",
+            f"PAD {number} changes banks. Put a sound on it instead? It would no longer "
+            f"change banks in every bank that uses pad set {pad_set}.",
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
     def assign_file(self, number: int, path: Path) -> bool:
         """Put *path* (a copy) on pad *number* in the current bank and make the
         pad a sound pad.  Used by Choose… and by the Tuna page."""
+        if not self._confirm_replace_bank_pad(number):
+            return False
         key = self._key(number)
         try:
             copy = store.import_file(key, path)
@@ -754,16 +784,7 @@ class PadsPanel(QWidget):
             store.remove_file(sound.file)
         self._show_sound()
         self._refresh_tile(number)
-        settings = store.load()
-        current = self._pad_set()
-        in_use = any(
-            k.endswith(f":{number}")
-            and s.file
-            and settings.bank_pad_set(int(k.split(":")[0])) == current
-            for k, s in settings.pads.items()
-        )
-        if not in_use:  # no other bank on this pad set uses the pad
-            self._restore_pad(number)
+        self.pads_changed.emit()
 
     def _preview(self) -> None:
         if self._player is not None:
